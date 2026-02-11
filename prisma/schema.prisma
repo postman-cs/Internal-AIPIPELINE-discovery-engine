@@ -1,0 +1,393 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+// ---------------------------------------------------------------------------
+// Cascade Update Enums
+// ---------------------------------------------------------------------------
+
+enum Phase {
+  DISCOVERY
+  CURRENT_TOPOLOGY
+  DESIRED_FUTURE_STATE
+  SOLUTION_DESIGN
+  TEST_DESIGN
+  CRAFT_SOLUTION
+  TEST_SOLUTION
+  DEPLOYMENT_PLAN
+  MONITORING
+  ITERATION
+}
+
+enum ArtifactStatus {
+  CLEAN
+  DIRTY
+  STALE
+  NEEDS_REVIEW
+  CLEAN_WITH_EXCEPTIONS
+}
+
+enum ProposalStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+// ---------------------------------------------------------------------------
+// Topology Enums
+// ---------------------------------------------------------------------------
+
+enum TopologyNodeType {
+  SERVICE
+  API
+  GATEWAY
+  DATABASE
+  IDENTITY_PROVIDER
+  CDN
+  LOAD_BALANCER
+  CLIENT
+  EXTERNAL_SYSTEM
+  QUEUE
+  STORAGE
+}
+
+enum TopologyEdgeType {
+  CALLS
+  AUTHENTICATES_WITH
+  ROUTES_THROUGH
+  READS_FROM
+  WRITES_TO
+  DEPENDS_ON
+}
+
+// ---------------------------------------------------------------------------
+// Auth & Users
+// ---------------------------------------------------------------------------
+
+model User {
+  id                  String               @id @default(cuid())
+  email               String               @unique
+  name                String
+  passwordHash        String
+  createdAt           DateTime             @default(now())
+  projects            Project[]
+  ingestRuns          IngestRun[]
+  ingestSourceConfigs IngestSourceConfig[]
+}
+
+// ---------------------------------------------------------------------------
+// Projects
+// ---------------------------------------------------------------------------
+
+model Project {
+  id                 String              @id @default(cuid())
+  name               String
+  primaryDomain      String?
+  apiDomain          String?
+  publicWorkspaceUrl String?
+  ownerUserId        String
+  owner              User                @relation(fields: [ownerUserId], references: [id])
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  discoveryArtifacts DiscoveryArtifact[]
+  sourceDocuments    SourceDocument[]
+  aiRuns             AIRun[]
+  evidenceSnapshots  EvidenceSnapshot[]
+  phaseArtifacts     PhaseArtifact[]
+  recomputeJobs      RecomputeJob[]
+  proposals          Proposal[]
+  topologyNodes      TopologyNode[]
+  topologyEdges      TopologyEdge[]
+  topologySnapshots  TopologySnapshot[]
+}
+
+// ---------------------------------------------------------------------------
+// Ingest Infrastructure (existing)
+// ---------------------------------------------------------------------------
+
+model IngestSourceConfig {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id])
+  source            String
+  enabled           Boolean  @default(true)
+  configJson        String?
+  lastSyncAt        DateTime?
+  lastSyncStatus    String?
+  lastSyncItemCount Int?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([userId, source])
+}
+
+model IngestRun {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id])
+  startedAt     DateTime    @default(now())
+  finishedAt    DateTime?
+  status        String      @default("QUEUED")
+  trigger       String      @default("MANUAL")
+  sourcesFilter String?
+  summary       String?
+  countsJson    String?
+  items         IngestItem[]
+}
+
+model IngestItem {
+  id           String    @id @default(cuid())
+  ingestRunId  String
+  ingestRun    IngestRun @relation(fields: [ingestRunId], references: [id], onDelete: Cascade)
+  source       String
+  externalId   String?
+  title        String
+  timestamp    DateTime  @default(now())
+  url          String?
+  rawText      String?
+  metadataJson String?
+  consumedAt   DateTime?
+}
+
+// ---------------------------------------------------------------------------
+// AI Document Pipeline (new)
+// ---------------------------------------------------------------------------
+
+model SourceDocument {
+  id           String          @id @default(cuid())
+  projectId    String
+  project      Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceType   String          // KEPLER, DNS, HEADERS, GITHUB, MANUAL, SLACK, GMAIL, etc.
+  externalId   String?         // External source dedup key (e.g. email ID, file hash)
+  contentHash  String?         // SHA-256 of rawText for idempotent ingestion
+  title        String?
+  rawText      String
+  metadataJson Json?
+  createdAt    DateTime        @default(now())
+  chunks       DocumentChunk[]
+
+  @@unique([projectId, contentHash])
+  @@index([projectId, externalId])
+}
+
+model DocumentChunk {
+  id            String                      @id @default(cuid())
+  documentId    String
+  document      SourceDocument              @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  projectId     String
+  content       String
+  embedding     Unsupported("vector(3072)")
+  tokenCount    Int?
+  evidenceLabel String                      // EVIDENCE-1, EVIDENCE-2, ...
+  createdAt     DateTime                    @default(now())
+
+  @@index([projectId])
+}
+
+model AIRun {
+  id         String   @id @default(cuid())
+  projectId  String?
+  project    Project? @relation(fields: [projectId], references: [id])
+  agentType  String   // ReconSynthesizer, SignalClassifier, MaturityScorer, HypothesisGenerator, BriefGenerator, etc.
+  model      String
+  promptHash String
+  snapshotId String?  // EvidenceSnapshot used for this run (observability)
+  inputJson  Json
+  outputJson Json?
+  tokenUsage Json?
+  durationMs Int?
+  status     String   // RUNNING, SUCCESS, FAILED
+  createdAt  DateTime @default(now())
+
+  @@index([projectId])
+  @@index([agentType])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Discovery Artifacts (existing — enhanced with AI citations)
+// ---------------------------------------------------------------------------
+
+model DiscoveryArtifact {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version   Int     @default(1)
+
+  // Kepler
+  keplerPaste String?
+
+  // Outside-In Terrain Map
+  dnsFindings              String?
+  headerFindings           String?
+  publicFootprint          String?
+  authForensics            String?
+  cloudGatewaySignals      String?
+  developerFrictionSignals String?
+  evidenceLinksJson        String?
+
+  // Company Snapshot
+  industry          String?
+  engineeringSize   String?
+  publicApiPresence String?
+
+  // Technical Landscape
+  technicalLandscapeJson String?
+
+  // Maturity
+  maturityLevel         Int?
+  maturityJustification String?
+  confidenceJson        String?
+
+  // Hypothesis + Approach
+  hypothesis          String?
+  recommendedApproach String?
+  conversationAngle   String?
+
+  // Stakeholders
+  stakeholderTargetsJson String?
+  firstMeetingAgendaJson String?
+
+  // Generated Brief
+  generatedBriefMarkdown String?
+  generatedBriefJson     String?
+
+  // AI provenance (new)
+  aiGenerated        Boolean  @default(false)
+  aiRunIds           Json?    // Array of AIRun IDs that produced this artifact
+  evidenceCitations  Json?    // Array of { evidenceLabel, chunkId, sourceType, usedInSection }
+
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, version])
+}
+
+// ---------------------------------------------------------------------------
+// Cascade Update System
+// ---------------------------------------------------------------------------
+
+model EvidenceSnapshot {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  chunkIdsJson Json     // Array of DocumentChunk IDs in this snapshot
+  countsJson   Json?    // { bySource: { KEPLER: 5, DNS: 3, ... }, total: 8 }
+  hash         String   // SHA-256 of sorted chunk IDs for reproducibility
+  createdAt    DateTime @default(now())
+
+  @@index([projectId])
+}
+
+model PhaseArtifact {
+  id              String         @id @default(cuid())
+  projectId       String
+  project         Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phase           Phase
+  version         Int
+  status          ArtifactStatus @default(DIRTY)
+  snapshotId      String?        // EvidenceSnapshot this was computed against
+  derivedFromJson Json?          // { upstreamRefs: [{ phase, version }], snapshotHash }
+  contentJson     Json           // Structured phase output (Discovery brief JSON, etc.)
+  contentMarkdown String?        // Rendered markdown for human consumption
+  lastComputedAt  DateTime?
+  ignoredSnapshotIds Json?       // Array of snapshot IDs user explicitly rejected
+  createdAt       DateTime       @default(now())
+
+  @@unique([projectId, phase, version])
+  @@index([projectId, phase])
+}
+
+model RecomputeJob {
+  id          String          @id @default(cuid())
+  projectId   String
+  project     Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  triggeredBy String          // INGEST, MANUAL
+  snapshotId  String?         // Snapshot that triggered this job
+  status      String          @default("PENDING") // PENDING, RUNNING, COMPLETED, FAILED
+  startedAt   DateTime        @default(now())
+  finishedAt  DateTime?
+  tasks       RecomputeTask[]
+
+  @@index([projectId])
+}
+
+model RecomputeTask {
+  id            String       @id @default(cuid())
+  jobId         String
+  job           RecomputeJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  phase         Phase
+  status        String       @default("PENDING") // PENDING, RUNNING, COMPLETED, SKIPPED, FAILED
+  inputRefsJson Json         // { upstreamVersions: { DISCOVERY: 3 }, snapshotId: "..." }
+  proposalId    String?      // Created proposal, if any
+  message       String?      // Status message / error
+  startedAt     DateTime?
+  finishedAt    DateTime?
+}
+
+model Proposal {
+  id                  String         @id @default(cuid())
+  projectId           String
+  project             Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phase               Phase
+  snapshotId          String         // Snapshot used for this recompute
+  baseArtifactVersion Int            // Version of the artifact this patches
+  patchJson           Json           // Array of patch operations
+  proposedJson        Json           // Full proposed artifact content
+  proposedMarkdown    String?        // Rendered proposed markdown
+  diffSummary         String?        // Human-readable summary of changes
+  status              ProposalStatus @default(PENDING)
+  aiRunIds            Json?          // Array of AIRun IDs used
+  createdAt           DateTime       @default(now())
+  resolvedAt          DateTime?
+
+  @@index([projectId, phase])
+}
+
+// ---------------------------------------------------------------------------
+// Topology Graph Models
+// ---------------------------------------------------------------------------
+
+model TopologyNode {
+  id           String           @id @default(cuid())
+  projectId    String
+  project      Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type         TopologyNodeType
+  name         String
+  metadataJson Json?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([projectId])
+}
+
+model TopologyEdge {
+  id           String           @id @default(cuid())
+  projectId    String
+  project      Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fromNodeId   String
+  toNodeId     String
+  type         TopologyEdgeType
+  metadataJson Json?
+  createdAt    DateTime         @default(now())
+
+  @@index([projectId])
+}
+
+model TopologySnapshot {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  snapshotId   String   // link to EvidenceSnapshot
+  nodeIdsJson  Json
+  edgeIdsJson  Json
+  createdAt    DateTime @default(now())
+
+  @@index([projectId])
+}
