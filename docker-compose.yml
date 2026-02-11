@@ -1,9 +1,15 @@
-version: "3.9"
+# docker-compose.yml — Local development environment
+#
+# Usage:
+#   docker compose up -d          # Start everything
+#   docker compose up -d postgres # Just the database
+#   docker compose logs -f app    # Follow app logs
+#   docker compose down           # Stop everything
 
 services:
   postgres:
-    image: pgvector/pgvector:pg17
-    restart: unless-stopped
+    image: pgvector/pgvector:pg16
+    container_name: ai-pipeline-db
     environment:
       POSTGRES_USER: pipeline
       POSTGRES_PASSWORD: pipeline
@@ -12,6 +18,32 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline -d ai_pipeline"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: ai-pipeline-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://pipeline:pipeline@postgres:5432/ai_pipeline?schema=public
+      SESSION_SECRET: "${SESSION_SECRET:-change-me-in-production-must-be-at-least-32-characters-long}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      CRON_SECRET: "${CRON_SECRET:-change-me-cron-secret}"
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
 
 volumes:
   pgdata:
