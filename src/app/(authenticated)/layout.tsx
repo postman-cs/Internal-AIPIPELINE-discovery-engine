@@ -2,6 +2,7 @@ import { getSession } from "@/lib/session";
 import { redirect } from "next/navigation";
 import { TopNav } from "@/components/TopNav";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
+import { Starfield } from "@/components/Starfield";
 
 export default async function AuthenticatedLayout({
   children,
@@ -14,10 +15,11 @@ export default async function AuthenticatedLayout({
   }
 
   return (
-    <div className="min-h-screen mesh-bg" style={{ background: "var(--background)" }}>
+    <div className="min-h-screen" style={{ background: "var(--background)" }}>
+      <Starfield />
       <TopNav userName={session.name} />
       <Breadcrumbs />
-      <main>{children}</main>
+      <main className="relative z-10">{children}</main>
     </div>
   );
 }

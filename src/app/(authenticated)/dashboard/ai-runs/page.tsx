@@ -14,9 +14,7 @@ export default async function AIRunsPage() {
         <div className="flex items-center gap-2 text-sm mb-2" style={{ color: "var(--foreground-dim)" }}>
           <Link
             href="/dashboard"
-            className="transition-colors"
-            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent-cyan)")}
-            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--foreground-dim)")}
+            className="transition-colors hover-link"
           >
             Dashboard
           </Link>
