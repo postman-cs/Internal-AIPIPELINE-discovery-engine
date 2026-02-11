@@ -106,6 +106,8 @@ model Project {
   topologyNodes      TopologyNode[]
   topologyEdges      TopologyEdge[]
   topologySnapshots  TopologySnapshot[]
+  notes              ProjectNote[]
+  isPinned           Boolean             @default(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +380,23 @@ model TopologyEdge {
   createdAt    DateTime         @default(now())
 
   @@index([projectId])
+}
+
+// ---------------------------------------------------------------------------
+// Project Notes (scratchpad)
+// ---------------------------------------------------------------------------
+
+model ProjectNote {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId    String
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([userId])
 }
 
 model TopologySnapshot {

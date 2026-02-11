@@ -17,8 +17,22 @@ export async function getSourceConfigs() {
   });
 }
 
+const MAX_CONFIG_JSON_LENGTH = 10_000; // 10KB limit for config JSON
+
 export async function connectSource(source: SourceKey, configJson?: string) {
   const session = await requireAuth();
+
+  // Validate configJson size and format
+  if (configJson) {
+    if (configJson.length > MAX_CONFIG_JSON_LENGTH) {
+      return { error: "Configuration too large" };
+    }
+    try {
+      JSON.parse(configJson);
+    } catch {
+      return { error: "Invalid JSON configuration" };
+    }
+  }
 
   const config = await prisma.ingestSourceConfig.upsert({
     where: {
@@ -43,6 +57,16 @@ export async function connectSource(source: SourceKey, configJson?: string) {
 export async function updateSourceConfig(source: SourceKey, configJson: string) {
   const session = await requireAuth();
 
+  // Validate configJson size and format
+  if (configJson.length > MAX_CONFIG_JSON_LENGTH) {
+    return { error: "Configuration too large" };
+  }
+  try {
+    JSON.parse(configJson);
+  } catch {
+    return { error: "Invalid JSON configuration" };
+  }
+
   await prisma.ingestSourceConfig.update({
     where: {
       userId_source: { userId: session.userId, source },
@@ -57,11 +81,12 @@ export async function updateSourceConfig(source: SourceKey, configJson: string) 
 export async function disconnectSource(source: SourceKey) {
   const session = await requireAuth();
 
-  await prisma.ingestSourceConfig.update({
+  await prisma.ingestSourceConfig.upsert({
     where: {
       userId_source: { userId: session.userId, source },
     },
-    data: { enabled: false },
+    update: { enabled: false },
+    create: { userId: session.userId, source, enabled: false },
   });
 
   revalidatePath("/ingest");
@@ -71,11 +96,12 @@ export async function disconnectSource(source: SourceKey) {
 export async function toggleSource(source: SourceKey, enabled: boolean) {
   const session = await requireAuth();
 
-  await prisma.ingestSourceConfig.update({
+  await prisma.ingestSourceConfig.upsert({
     where: {
       userId_source: { userId: session.userId, source },
     },
-    data: { enabled },
+    update: { enabled },
+    create: { userId: session.userId, source, enabled },
   });
 
   revalidatePath("/ingest");
@@ -240,8 +266,8 @@ export async function runIngestAction(sourcesFilter?: SourceKey[]) {
           lastSyncItemCount: counts[source] || 0,
         },
       })
-      .catch(() => {
-        /* config might not exist yet for this source */
+      .catch((err: unknown) => {
+        console.warn(`[ingest] Failed to update sync status for ${source}:`, err);
       });
   }
 
@@ -258,6 +284,10 @@ export async function runSingleSourceIngest(source: SourceKey) {
 // Manual upload
 // ---------------------------------------------------------------------------
 
+const MAX_UPLOAD_TITLE_LENGTH = 500;
+const MAX_UPLOAD_CONTENT_LENGTH = 200_000; // 200KB
+const MAX_UPLOAD_URL_LENGTH = 2048;
+
 export async function manualUploadAction(data: {
   title: string;
   content: string;
@@ -265,8 +295,17 @@ export async function manualUploadAction(data: {
 }) {
   const session = await requireAuth();
 
-  if (!data.title.trim() || !data.content.trim()) {
+  if (!data.title?.trim() || !data.content?.trim()) {
     return { error: "Title and content are required" };
+  }
+  if (data.title.length > MAX_UPLOAD_TITLE_LENGTH) {
+    return { error: `Title must be under ${MAX_UPLOAD_TITLE_LENGTH} characters` };
+  }
+  if (data.content.length > MAX_UPLOAD_CONTENT_LENGTH) {
+    return { error: `Content must be under ${MAX_UPLOAD_CONTENT_LENGTH} characters` };
+  }
+  if (data.url && data.url.length > MAX_UPLOAD_URL_LENGTH) {
+    return { error: `URL must be under ${MAX_UPLOAD_URL_LENGTH} characters` };
   }
 
   // Create a run for this upload
@@ -310,7 +349,9 @@ export async function manualUploadAction(data: {
         lastSyncItemCount: 1,
       },
     })
-    .catch(() => {});
+    .catch((err: unknown) => {
+      console.warn("[ingest] Failed to update manual upload sync status:", err);
+    });
 
   revalidatePath("/ingest");
   revalidatePath("/dashboard");
@@ -322,9 +363,14 @@ export async function manualUploadAction(data: {
 // ---------------------------------------------------------------------------
 
 export async function consumeItemsAction(source?: string) {
-  await requireAuth();
+  const session = await requireAuth();
 
-  const where = source ? { source, consumedAt: null } : { consumedAt: null };
+  // Scope to items belonging to the authenticated user's ingest runs
+  const where: Record<string, unknown> = {
+    consumedAt: null,
+    ingestRun: { userId: session.userId },
+  };
+  if (source) where.source = source;
 
   const result = await prisma.ingestItem.updateMany({
     where,
@@ -336,7 +382,14 @@ export async function consumeItemsAction(source?: string) {
 }
 
 export async function consumeSingleItem(itemId: string) {
-  await requireAuth();
+  const session = await requireAuth();
+
+  // Verify the item belongs to the authenticated user
+  const item = await prisma.ingestItem.findFirst({
+    where: { id: itemId, ingestRun: { userId: session.userId } },
+    select: { id: true },
+  });
+  if (!item) return { error: "Item not found" };
 
   await prisma.ingestItem.update({
     where: { id: itemId },
@@ -348,7 +401,14 @@ export async function consumeSingleItem(itemId: string) {
 }
 
 export async function unconsumeSingleItem(itemId: string) {
-  await requireAuth();
+  const session = await requireAuth();
+
+  // Verify the item belongs to the authenticated user
+  const item = await prisma.ingestItem.findFirst({
+    where: { id: itemId, ingestRun: { userId: session.userId } },
+    select: { id: true },
+  });
+  if (!item) return { error: "Item not found" };
 
   await prisma.ingestItem.update({
     where: { id: itemId },
@@ -364,19 +424,21 @@ export async function unconsumeSingleItem(itemId: string) {
 // ---------------------------------------------------------------------------
 
 export async function getIngestRuns(limit = 10) {
-  await requireAuth();
+  const session = await requireAuth();
+  const safeLimit = Math.min(Math.max(limit, 1), 100); // Cap at 100
   return prisma.ingestRun.findMany({
+    where: { userId: session.userId },
     orderBy: { startedAt: "desc" },
-    take: limit,
+    take: safeLimit,
     include: { _count: { select: { items: true } } },
   });
 }
 
 export async function getUnconsumedCounts() {
-  await requireAuth();
+  const session = await requireAuth();
   const items = await prisma.ingestItem.groupBy({
     by: ["source"],
-    where: { consumedAt: null },
+    where: { consumedAt: null, ingestRun: { userId: session.userId } },
     _count: { id: true },
   });
   const counts: Record<string, number> = {};
@@ -392,18 +454,22 @@ export async function getIngestItems(opts: {
   limit?: number;
   offset?: number;
 }) {
-  await requireAuth();
+  const session = await requireAuth();
 
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = {
+    ingestRun: { userId: session.userId },
+  };
   if (opts.source) where.source = opts.source;
   if (opts.consumed === true) where.consumedAt = { not: null };
   if (opts.consumed === false) where.consumedAt = null;
+
+  const safeLimit = Math.min(Math.max(opts.limit || 25, 1), 200); // Cap at 200
 
   const [items, total] = await Promise.all([
     prisma.ingestItem.findMany({
       where,
       orderBy: { timestamp: "desc" },
-      take: opts.limit || 25,
+      take: safeLimit,
       skip: opts.offset || 0,
       include: {
         ingestRun: { select: { trigger: true } },
@@ -416,16 +482,19 @@ export async function getIngestItems(opts: {
 }
 
 export async function getSourceStats() {
-  await requireAuth();
+  const session = await requireAuth();
+
+  const userFilter = { ingestRun: { userId: session.userId } };
 
   const [totalBySource, unconsumedBySource] = await Promise.all([
     prisma.ingestItem.groupBy({
       by: ["source"],
+      where: userFilter,
       _count: { id: true },
     }),
     prisma.ingestItem.groupBy({
       by: ["source"],
-      where: { consumedAt: null },
+      where: { ...userFilter, consumedAt: null },
       _count: { id: true },
     }),
   ]);

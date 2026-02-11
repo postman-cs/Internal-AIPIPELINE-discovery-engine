@@ -40,12 +40,13 @@ export async function getProjects() {
   const session = await requireAuth();
   return prisma.project.findMany({
     where: { ownerUserId: session.userId },
-    orderBy: { updatedAt: "desc" },
+    orderBy: [{ isPinned: "desc" }, { updatedAt: "desc" }],
     include: {
       discoveryArtifacts: {
         orderBy: { version: "desc" },
         take: 1,
       },
+      _count: { select: { sourceDocuments: true, phaseArtifacts: true } },
     },
   });
 }
@@ -60,5 +61,21 @@ export async function getProject(projectId: string) {
         take: 1,
       },
     },
+  });
+}
+
+/**
+ * Search projects by name (for command palette / search).
+ */
+export async function searchProjects(query: string) {
+  const session = await requireAuth();
+  return prisma.project.findMany({
+    where: {
+      ownerUserId: session.userId,
+      name: { contains: query, mode: "insensitive" },
+    },
+    orderBy: [{ isPinned: "desc" }, { updatedAt: "desc" }],
+    take: 10,
+    select: { id: true, name: true, primaryDomain: true, isPinned: true },
   });
 }
