@@ -1,13 +1,20 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  // Block in production — middleware also blocks this, but defense-in-depth
   if (process.env.NODE_ENV === "production") {
-    return NextResponse.json(
-      { error: "Seed not available in production" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  // In non-production, require a seed token if one is configured
+  const seedToken = process.env.SEED_TOKEN;
+  if (seedToken) {
+    const authHeader = request.headers.get("authorization");
+    if (authHeader !== `Bearer ${seedToken}`) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
   }
 
   const passwordHash = await bcrypt.hash("pipeline123", 10);
@@ -48,7 +55,7 @@ export async function POST() {
 
   return NextResponse.json({
     success: true,
-    user: { id: user.id, email: user.email },
+    message: "Seed data created",
     projects: ["Acme Corp", "TechStart Inc"],
   });
 }

@@ -1,25 +1,24 @@
 import { getIronSession, IronSession } from "iron-session";
 import { cookies } from "next/headers";
 
-export interface SessionData {
-  userId?: string;
-  email?: string;
-  name?: string;
-}
+// Re-export shared config types and functions
+export {
+  type SessionData,
+  SESSION_COOKIE_NAME,
+  getSessionSecret,
+  getSessionOptions,
+} from "./session-config";
 
-const sessionOptions = {
-  password: process.env.SESSION_SECRET || "this-is-a-dev-secret-change-in-production-must-be-32-chars-long!!",
-  cookieName: "ai-pipeline-session",
-  cookieOptions: {
-    secure: process.env.NODE_ENV === "production",
-    httpOnly: true,
-    sameSite: "lax" as const,
-  },
-};
+import type { SessionData } from "./session-config";
+import { getSessionOptions } from "./session-config";
+
+// ---------------------------------------------------------------------------
+// Session helpers — use next/headers, so NOT safe for Edge/middleware
+// ---------------------------------------------------------------------------
 
 export async function getSession(): Promise<IronSession<SessionData>> {
   const cookieStore = await cookies();
-  return getIronSession<SessionData>(cookieStore, sessionOptions);
+  return getIronSession<SessionData>(cookieStore, getSessionOptions());
 }
 
 export async function requireAuth(): Promise<SessionData & { userId: string }> {
@@ -27,5 +26,9 @@ export async function requireAuth(): Promise<SessionData & { userId: string }> {
   if (!session.userId) {
     throw new Error("Unauthorized");
   }
-  return { userId: session.userId, email: session.email!, name: session.name! };
+  return {
+    userId: session.userId,
+    email: session.email ?? "",
+    name: session.name ?? "",
+  };
 }

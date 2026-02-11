@@ -51,11 +51,12 @@ describe("rbacErrorResponse", () => {
     expect(body.error).toBe("Unauthorized");
   });
 
-  it("returns 500 for generic errors", async () => {
+  it("returns 500 for generic errors without leaking message", async () => {
     const res = rbacErrorResponse(new Error("Something went wrong"));
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body.error).toBe("Something went wrong");
+    // Should NOT leak the raw error message — returns generic response
+    expect(body.error).toBe("Internal server error");
   });
 
   it("returns 500 for non-Error objects", async () => {

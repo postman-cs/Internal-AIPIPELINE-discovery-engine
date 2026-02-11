@@ -6,30 +6,63 @@
  */
 
 import { NextRequest } from "next/server";
+import { z } from "zod";
 import { requireAuth } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { ingestDocument } from "@/lib/ai/ingest";
 import { createEvidenceSnapshot } from "@/lib/cascade/snapshot";
 import { runImpactAnalysis } from "@/lib/cascade/impact";
 
+// ---------------------------------------------------------------------------
+// Input validation schema
+// ---------------------------------------------------------------------------
+
+const MAX_DOCUMENTS_PER_REQUEST = 50;
+const MAX_RAW_TEXT_LENGTH = 100_000; // ~100KB per document
+const MAX_TITLE_LENGTH = 500;
+const MAX_SOURCE_TYPE_LENGTH = 100;
+
+const ingestDocumentSchema = z.object({
+  sourceType: z.string().min(1).max(MAX_SOURCE_TYPE_LENGTH),
+  title: z.string().max(MAX_TITLE_LENGTH).optional(),
+  rawText: z.string().min(1).max(MAX_RAW_TEXT_LENGTH),
+  externalId: z.string().max(500).optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+const ingestRequestSchema = z.object({
+  projectId: z.string().min(1, "projectId required"),
+  documents: z
+    .array(ingestDocumentSchema)
+    .min(1, "documents array required")
+    .max(MAX_DOCUMENTS_PER_REQUEST, `Maximum ${MAX_DOCUMENTS_PER_REQUEST} documents per request`),
+});
+
+// ---------------------------------------------------------------------------
+// Route handler
+// ---------------------------------------------------------------------------
+
 export async function POST(request: NextRequest) {
   try {
     const session = await requireAuth();
-    const body = await request.json();
-    const { projectId, documents } = body as {
-      projectId: string;
-      documents?: Array<{
-        sourceType: string;
-        title?: string;
-        rawText: string;
-        externalId?: string;
-        metadata?: Record<string, unknown>;
-      }>;
-    };
 
-    if (!projectId) {
-      return Response.json({ error: "projectId required" }, { status: 400 });
+    // Parse and validate body
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return Response.json({ error: "Invalid JSON body" }, { status: 400 });
     }
+
+    const parsed = ingestRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return Response.json(
+        { error: parsed.error.errors[0].message },
+        { status: 400 }
+      );
+    }
+
+    const { projectId, documents } = parsed.data;
 
     // Verify project ownership
     const project = await prisma.project.findFirst({
@@ -39,16 +72,11 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "Project not found" }, { status: 404 });
     }
 
-    if (!documents || documents.length === 0) {
-      return Response.json({ error: "documents array required" }, { status: 400 });
-    }
-
     // Inline ingest (fallback when worker not running)
     const results = [];
     let newDocs = 0;
 
     for (const doc of documents) {
-      if (!doc.sourceType || !doc.rawText) continue;
       const result = await ingestDocument({
         projectId,
         sourceType: doc.sourceType,
@@ -87,10 +115,10 @@ export async function POST(request: NextRequest) {
       })),
     });
   } catch (error) {
-    const msg = error instanceof Error ? error.message : "Ingest failed";
-    if (msg === "Unauthorized") {
+    if (error instanceof Error && error.message === "Unauthorized") {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
-    return Response.json({ error: msg }, { status: 500 });
+    console.error("[api/ingest/run] Unhandled error:", error);
+    return Response.json({ error: "Ingest failed" }, { status: 500 });
   }
 }

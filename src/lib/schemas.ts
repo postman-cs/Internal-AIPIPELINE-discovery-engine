@@ -2,8 +2,8 @@ import { z } from "zod";
 
 // Auth
 export const loginSchema = z.object({
-  email: z.string().email("Invalid email"),
-  password: z.string().min(1, "Password is required"),
+  email: z.string().email("Invalid email").max(320),
+  password: z.string().min(1, "Password is required").max(256),
 });
 
 // Project
@@ -11,7 +11,10 @@ export const createProjectSchema = z.object({
   name: z.string().min(1, "Project name is required").max(200),
   primaryDomain: z.string().max(500).optional().or(z.literal("")),
   apiDomain: z.string().max(500).optional().or(z.literal("")),
-  publicWorkspaceUrl: z.string().max(500).optional().or(z.literal("")),
+  publicWorkspaceUrl: z.string().max(500).optional().or(z.literal("")).refine(
+    (val) => !val || val.startsWith("https://") || val.startsWith("http://"),
+    { message: "URL must start with http:// or https://" }
+  ),
 });
 
 // Discovery Artifact

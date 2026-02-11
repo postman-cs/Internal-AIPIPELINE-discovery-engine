@@ -51,6 +51,7 @@ export async function requireProjectAccess(projectId: string): Promise<{
 
 /**
  * Build a JSON error response from RBAC/auth exceptions.
+ * IMPORTANT: Never leak raw error messages from unexpected errors to clients.
  */
 export function rbacErrorResponse(error: unknown): Response {
   if (error instanceof ForbiddenError) {
@@ -62,6 +63,7 @@ export function rbacErrorResponse(error: unknown): Response {
   if (error instanceof Error && error.message === "Unauthorized") {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const msg = error instanceof Error ? error.message : "Internal error";
-  return Response.json({ error: msg }, { status: 500 });
+  // Log the real error server-side, return generic message to client
+  console.error("[rbac] Unhandled error:", error);
+  return Response.json({ error: "Internal server error" }, { status: 500 });
 }

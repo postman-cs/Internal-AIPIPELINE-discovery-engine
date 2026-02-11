@@ -245,7 +245,16 @@ export async function rejectProposal(proposalId: string) {
  * Get the full cascade state for a project's /updates page.
  */
 export async function getCascadeState(projectId: string) {
-  await requireAuth();
+  const session = await requireAuth();
+
+  // Verify project ownership
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, ownerUserId: session.userId },
+    select: { id: true },
+  });
+  if (!project) {
+    return { snapshots: [], phaseGraph: [], proposals: [], pendingCount: 0, jobs: [] };
+  }
 
   const [
     snapshots,
@@ -416,13 +425,20 @@ async function syncDiscoveryArtifact(
  * Get a single proposal with its full patch detail.
  */
 export async function getProposalDetail(proposalId: string) {
-  await requireAuth();
+  const session = await requireAuth();
 
   const proposal = await prisma.proposal.findUnique({
     where: { id: proposalId },
   });
 
   if (!proposal) return null;
+
+  // Verify the user owns the project this proposal belongs to
+  const project = await prisma.project.findFirst({
+    where: { id: proposal.projectId, ownerUserId: session.userId },
+    select: { id: true },
+  });
+  if (!project) return null;
 
   // Get the base artifact to show "before" state
   const baseArtifact = await prisma.phaseArtifact.findFirst({

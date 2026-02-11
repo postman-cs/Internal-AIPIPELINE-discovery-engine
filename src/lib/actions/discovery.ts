@@ -216,8 +216,9 @@ export async function ingestDiscoveryDocument(
 
       const impact = await runImpactAnalysis(projectId, snapshot.snapshotId, "INGEST");
       impactedPhases = impact.impactedPhases;
-    } catch {
-      // Non-fatal: cascade runs separately; don't block ingest
+    } catch (cascadeErr) {
+      // Non-fatal: cascade runs separately; don't block ingest — but log it
+      console.warn("[discovery] Cascade snapshot/impact failed (non-fatal):", cascadeErr);
     }
 
     revalidatePath(`/projects/${projectId}/discovery`);
@@ -232,8 +233,8 @@ export async function ingestDiscoveryDocument(
       impactedPhases,
     };
   } catch (error) {
-    const msg = error instanceof Error ? error.message : "Ingestion failed";
-    return { error: msg };
+    console.error("[discovery] Ingestion error:", error);
+    return { error: "Document ingestion failed. Please try again." };
   }
 }
 
@@ -325,8 +326,8 @@ export async function runAIDiscoveryPipeline(projectId: string) {
       validatedEvidenceIds: pipeline.validatedEvidenceIds.length,
     };
   } catch (error) {
-    const msg = error instanceof Error ? error.message : "Pipeline failed";
-    return { error: msg };
+    console.error("[discovery] AI pipeline error:", error);
+    return { error: "AI discovery pipeline failed. Please try again." };
   }
 }
 
@@ -335,7 +336,14 @@ export async function runAIDiscoveryPipeline(projectId: string) {
 // ---------------------------------------------------------------------------
 
 export async function getLatestDiscoveryArtifact(projectId: string) {
-  await requireAuth();
+  const session = await requireAuth();
+  // Verify project ownership before returning data
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, ownerUserId: session.userId },
+    select: { id: true },
+  });
+  if (!project) return null;
+
   return prisma.discoveryArtifact.findFirst({
     where: { projectId },
     orderBy: { version: "desc" },
@@ -343,7 +351,14 @@ export async function getLatestDiscoveryArtifact(projectId: string) {
 }
 
 export async function getDiscoveryArtifact(projectId: string, version?: number) {
-  await requireAuth();
+  const session = await requireAuth();
+  // Verify project ownership
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, ownerUserId: session.userId },
+    select: { id: true },
+  });
+  if (!project) return null;
+
   if (version) {
     return prisma.discoveryArtifact.findFirst({
       where: { projectId, version },
@@ -356,7 +371,14 @@ export async function getDiscoveryArtifact(projectId: string, version?: number) 
 }
 
 export async function getProjectEvidenceStats(projectId: string) {
-  await requireAuth();
+  const session = await requireAuth();
+  // Verify project ownership
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, ownerUserId: session.userId },
+    select: { id: true },
+  });
+  if (!project) return { docCount: 0, chunkCount: 0 };
+
   const [docCount, chunkCount] = await Promise.all([
     prisma.sourceDocument.count({ where: { projectId } }),
     prisma.documentChunk.count({ where: { projectId } }),
@@ -365,7 +387,14 @@ export async function getProjectEvidenceStats(projectId: string) {
 }
 
 export async function getProjectAIRuns(projectId: string) {
-  await requireAuth();
+  const session = await requireAuth();
+  // Verify project ownership
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, ownerUserId: session.userId },
+    select: { id: true },
+  });
+  if (!project) return [];
+
   return prisma.aIRun.findMany({
     where: { projectId },
     orderBy: { createdAt: "desc" },
@@ -374,13 +403,23 @@ export async function getProjectAIRuns(projectId: string) {
 }
 
 /**
- * Get all AI runs across all projects (for admin observability).
+ * Get all AI runs across projects the user owns (for observability).
  */
 export async function getAllAIRuns(limit: number = 50) {
-  await requireAuth();
+  const session = await requireAuth();
+  const safeLimit = Math.min(Math.max(limit, 1), 200); // Cap at 200
+
+  // Only return runs from projects the user owns
+  const userProjects = await prisma.project.findMany({
+    where: { ownerUserId: session.userId },
+    select: { id: true },
+  });
+  const projectIds = userProjects.map((p) => p.id);
+
   return prisma.aIRun.findMany({
+    where: { projectId: { in: projectIds } },
     orderBy: { createdAt: "desc" },
-    take: limit,
+    take: safeLimit,
     include: {
       project: { select: { id: true, name: true } },
     },
@@ -388,18 +427,27 @@ export async function getAllAIRuns(limit: number = 50) {
 }
 
 /**
- * Get aggregate AI run statistics.
+ * Get aggregate AI run statistics for the authenticated user's projects.
  */
 export async function getAIRunStats() {
-  await requireAuth();
+  const session = await requireAuth();
+
+  // Only aggregate from the user's own projects
+  const userProjects = await prisma.project.findMany({
+    where: { ownerUserId: session.userId },
+    select: { id: true },
+  });
+  const projectIds = userProjects.map((p) => p.id);
+  const projectFilter = { projectId: { in: projectIds } };
+
   const [total, success, failed, running] = await Promise.all([
-    prisma.aIRun.count(),
-    prisma.aIRun.count({ where: { status: "SUCCESS" } }),
-    prisma.aIRun.count({ where: { status: "FAILED" } }),
-    prisma.aIRun.count({ where: { status: "RUNNING" } }),
+    prisma.aIRun.count({ where: projectFilter }),
+    prisma.aIRun.count({ where: { ...projectFilter, status: "SUCCESS" } }),
+    prisma.aIRun.count({ where: { ...projectFilter, status: "FAILED" } }),
+    prisma.aIRun.count({ where: { ...projectFilter, status: "RUNNING" } }),
   ]);
 
-  // Aggregate token usage from successful runs
+  // Aggregate token usage from successful runs (only user's projects)
   const tokenAgg = await prisma.$queryRaw<
     Array<{ totalPrompt: bigint; totalCompletion: bigint; totalTokens: bigint }>
   >`
@@ -408,7 +456,9 @@ export async function getAIRunStats() {
       COALESCE(SUM(("tokenUsage"->>'completion')::int), 0) as "totalCompletion",
       COALESCE(SUM(("tokenUsage"->>'total')::int), 0) as "totalTokens"
     FROM "AIRun"
-    WHERE "status" = 'SUCCESS' AND "tokenUsage" IS NOT NULL
+    WHERE "status" = 'SUCCESS'
+      AND "tokenUsage" IS NOT NULL
+      AND "projectId" = ANY(${projectIds})
   `;
 
   return {

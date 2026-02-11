@@ -12,10 +12,14 @@ const MOCK_TITLES: Record<string, string[]> = {
 };
 
 export async function POST(request: NextRequest) {
-  // Check for a secret to protect cron endpoint
-  const authHeader = request.headers.get("authorization");
-  const cronSecret = process.env.CRON_SECRET || "dev-cron-secret";
+  // Require CRON_SECRET — no fallback default
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    console.error("CRON_SECRET environment variable is not set — cron endpoint disabled");
+    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
+  }
 
+  const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -107,7 +111,9 @@ export async function POST(request: NextRequest) {
           lastSyncItemCount: counts[source] || 0,
         },
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        console.warn(`[cron] Failed to update sync status for ${source}:`, err);
+      });
   }
 
   return NextResponse.json({

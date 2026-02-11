@@ -13,7 +13,16 @@ export async function polishStoryOutline(
   projectId: string,
   outline: StoryOutline
 ) {
-  await requireAuth();
+  const session = await requireAuth();
+
+  // Verify project ownership before allowing AI work
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, ownerUserId: session.userId },
+    select: { id: true },
+  });
+  if (!project) {
+    throw new Error("Project not found");
+  }
 
   // Gather evidence excerpts for all referenced evidence IDs
   const allEvidenceIds = Array.from(
