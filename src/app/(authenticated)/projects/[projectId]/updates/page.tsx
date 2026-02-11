@@ -17,20 +17,14 @@ export default async function UpdatesPage({
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+        <h1 className="text-2xl font-bold" style={{ color: "var(--foreground)" }}>
           Cascade Updates
         </h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Evidence-driven update proposals. New evidence is ingested, impact is
-          analyzed, and proposals are generated for your review. No silent
-          overwrites.
+        <p className="text-sm mt-1" style={{ color: "var(--foreground-dim)" }}>
+          Evidence-driven update proposals. New evidence triggers impact analysis and proposals for your review.
         </p>
       </div>
-
-      <CascadeUpdatesPanel
-        projectId={projectId}
-        cascadeState={cascadeState}
-      />
+      <CascadeUpdatesPanel projectId={projectId} cascadeState={cascadeState} />
     </div>
   );
 }

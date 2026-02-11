@@ -9,69 +9,51 @@ export default async function AIRunsPage() {
   ]);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10">
       <div className="mb-8">
-        <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
+        <div className="flex items-center gap-2 text-sm mb-2" style={{ color: "var(--foreground-dim)" }}>
           <Link
             href="/dashboard"
-            className="hover:text-[#ff6c37] transition-colors"
+            className="transition-colors"
+            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent-cyan)")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--foreground-dim)")}
           >
             Dashboard
           </Link>
           <span>/</span>
-          <span className="text-gray-900 dark:text-gray-100">AI Runs</span>
+          <span style={{ color: "var(--foreground)" }}>AI Runs</span>
         </div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+        <h1 className="text-2xl font-bold" style={{ color: "var(--foreground)" }}>
           AI Pipeline Observability
         </h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <p className="text-sm mt-1" style={{ color: "var(--foreground-dim)" }}>
           Every LLM call is logged with prompt hash, token usage, duration, and
-          status. No black-box hallucination risk.
+          status.
         </p>
       </div>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mb-8">
         <StatCard label="Total Runs" value={stats.total} />
-        <StatCard
-          label="Success"
-          value={stats.success}
-          color="text-green-600"
-        />
-        <StatCard label="Failed" value={stats.failed} color="text-red-600" />
-        <StatCard
-          label="Running"
-          value={stats.running}
-          color="text-yellow-600"
-        />
-        <StatCard
-          label="Prompt Tokens"
-          value={formatNumber(stats.tokens.prompt)}
-          sub
-        />
-        <StatCard
-          label="Completion Tokens"
-          value={formatNumber(stats.tokens.completion)}
-          sub
-        />
-        <StatCard
-          label="Total Tokens"
-          value={formatNumber(stats.tokens.total)}
-          color="text-[#ff6c37]"
-          sub
-        />
+        <StatCard label="Success" value={stats.success} color="var(--accent-green)" />
+        <StatCard label="Failed" value={stats.failed} color="var(--accent-red)" />
+        <StatCard label="Running" value={stats.running} color="var(--accent-yellow)" />
+        <StatCard label="Prompt Tokens" value={formatNumber(stats.tokens.prompt)} sub />
+        <StatCard label="Completion Tokens" value={formatNumber(stats.tokens.completion)} sub />
+        <StatCard label="Total Tokens" value={formatNumber(stats.tokens.total)} color="var(--accent-orange)" sub />
       </div>
 
       {/* Runs Table */}
       {runs.length === 0 ? (
         <div className="card text-center py-12">
-          <p className="text-gray-500 text-sm">
+          <p className="text-sm" style={{ color: "var(--foreground-muted)" }}>
             No AI runs yet. Ingest evidence and run the Discovery Pipeline on a
             project to see logs here.
           </p>
           <Link
             href="/projects"
-            className="text-sm text-[#ff6c37] hover:underline mt-2 inline-block"
+            className="text-sm mt-2 inline-block"
+            style={{ color: "var(--accent-cyan)" }}
           >
             Go to Projects
           </Link>
@@ -95,14 +77,16 @@ function StatCard({
   sub?: boolean;
 }) {
   return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg px-4 py-3">
-      <p className="text-[11px] uppercase tracking-wider text-gray-500 mb-1">
+    <div className="card" style={{ padding: "0.75rem 1rem" }}>
+      <p
+        className="text-[11px] uppercase tracking-wider mb-1"
+        style={{ color: "var(--foreground-dim)" }}
+      >
         {label}
       </p>
       <p
-        className={`${sub ? "text-lg" : "text-2xl"} font-bold ${
-          color || "text-gray-900 dark:text-gray-100"
-        }`}
+        className={`${sub ? "text-lg" : "text-2xl"} font-bold`}
+        style={{ color: color || "var(--foreground)" }}
       >
         {value}
       </p>

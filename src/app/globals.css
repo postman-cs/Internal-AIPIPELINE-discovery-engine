@@ -1,74 +1,362 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* ==========================================================================
+   AI Pipeline — Futuristic Dark Design System
+   ========================================================================== */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-  --primary: #ff6c37;
-  --primary-dark: #e5552a;
-  --surface: #f8f9fa;
-  --border: #e5e7eb;
-  --muted: #6b7280;
+  --background: #06080f;
+  --background-secondary: #0c0e18;
+  --surface: #111524;
+  --surface-hover: #161b2e;
+  --surface-active: #1a2038;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-bright: rgba(255, 255, 255, 0.1);
+  --foreground: #e4e8f1;
+  --foreground-muted: #7a829a;
+  --foreground-dim: #626a84;
+
+  /* Accent colors */
+  --accent-cyan: #06d6d6;
+  --accent-blue: #3b82f6;
+  --accent-purple: #8b5cf6;
+  --accent-orange: #ff6c37;
+  --accent-green: #10b981;
+  --accent-red: #ef4444;
+  --accent-yellow: #f59e0b;
+
+  /* Glow */
+  --glow-cyan: 0 0 20px rgba(6, 214, 214, 0.15), 0 0 40px rgba(6, 214, 214, 0.05);
+  --glow-orange: 0 0 20px rgba(255, 108, 55, 0.2);
+  --glow-blue: 0 0 20px rgba(59, 130, 246, 0.15);
+  --glow-purple: 0 0 20px rgba(139, 92, 246, 0.15);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-    --surface: #1a1a1a;
-    --border: #2d2d2d;
-    --muted: #9ca3af;
-  }
-}
+/* ==========================================================================
+   Base
+   ========================================================================== */
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Utility classes for Postman-orange brand */
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+
+::selection {
+  background: rgba(6, 214, 214, 0.25);
+  color: white;
+}
+
+/* ==========================================================================
+   Utility Classes — Buttons
+   ========================================================================== */
+
 .btn-primary {
-  @apply bg-[#ff6c37] hover:bg-[#e5552a] text-white font-medium py-2 px-4 rounded-lg transition-colors duration-150;
+  @apply font-medium py-2 px-4 rounded-lg transition-all duration-200 text-white;
+  background: linear-gradient(135deg, #ff6c37, #e5552a);
+  box-shadow: 0 0 0 1px rgba(255, 108, 55, 0.3), var(--glow-orange);
+}
+.btn-primary:hover {
+  background: linear-gradient(135deg, #ff7a4a, #ff6c37);
+  box-shadow: 0 0 0 1px rgba(255, 108, 55, 0.5), 0 0 30px rgba(255, 108, 55, 0.3);
+  transform: translateY(-1px);
+}
+.btn-primary:active { transform: translateY(0); }
+.btn-primary:focus-visible {
+  outline: 2px solid rgba(255, 108, 55, 0.6);
+  outline-offset: 2px;
 }
 
 .btn-secondary {
-  @apply bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-gray-100 font-medium py-2 px-4 rounded-lg transition-colors duration-150;
+  @apply font-medium py-2 px-4 rounded-lg transition-all duration-200;
+  background: var(--surface);
+  color: var(--foreground);
+  border: 1px solid var(--border-bright);
+}
+.btn-secondary:hover {
+  background: var(--surface-hover);
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+.btn-secondary:focus-visible {
+  outline: 2px solid rgba(6, 214, 214, 0.5);
+  outline-offset: 2px;
 }
 
 .btn-ghost {
-  @apply hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 font-medium py-2 px-4 rounded-lg transition-colors duration-150;
+  @apply font-medium py-2 px-4 rounded-lg transition-all duration-200;
+  color: var(--foreground-muted);
+  background: transparent;
 }
+.btn-ghost:hover {
+  background: var(--surface);
+  color: var(--foreground);
+}
+.btn-ghost:focus-visible {
+  outline: 2px solid rgba(6, 214, 214, 0.5);
+  outline-offset: 2px;
+}
+
+.btn-cyan {
+  @apply font-medium py-2 px-4 rounded-lg transition-all duration-200 text-white;
+  background: linear-gradient(135deg, #06d6d6, #0891b2);
+  box-shadow: 0 0 0 1px rgba(6, 214, 214, 0.3), var(--glow-cyan);
+}
+.btn-cyan:hover {
+  box-shadow: 0 0 0 1px rgba(6, 214, 214, 0.5), 0 0 30px rgba(6, 214, 214, 0.25);
+  transform: translateY(-1px);
+}
+.btn-cyan:focus-visible {
+  outline: 2px solid rgba(6, 214, 214, 0.6);
+  outline-offset: 2px;
+}
+
+/* ==========================================================================
+   Utility Classes — Cards & Surfaces
+   ========================================================================== */
 
 .card {
-  @apply bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 shadow-sm;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 1.5rem;
+  backdrop-filter: blur(12px);
+  transition: all 0.2s ease;
+}
+.card:hover {
+  border-color: var(--border-bright);
 }
 
+.card-glass {
+  background: rgba(17, 21, 36, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 1.5rem;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.card-glow {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 1.5rem;
+  transition: all 0.3s ease;
+}
+.card-glow:hover {
+  border-color: rgba(6, 214, 214, 0.2);
+  box-shadow: var(--glow-cyan);
+}
+
+/* ==========================================================================
+   Utility Classes — Inputs
+   ========================================================================== */
+
 .input-field {
-  @apply w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#ff6c37]/50 focus:border-[#ff6c37] transition-colors;
+  @apply w-full rounded-lg px-3 py-2 text-sm outline-none transition-all duration-200;
+  background: var(--background-secondary);
+  border: 1px solid var(--border-bright);
+  color: var(--foreground);
+}
+.input-field::placeholder { color: var(--foreground-dim); }
+.input-field:focus {
+  border-color: rgba(6, 214, 214, 0.4);
+  box-shadow: 0 0 0 3px rgba(6, 214, 214, 0.08), 0 0 16px rgba(6, 214, 214, 0.06);
+  outline: none;
 }
 
 .label {
-  @apply block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1;
+  @apply block text-sm font-medium mb-1;
+  color: var(--foreground-muted);
 }
 
 .textarea-field {
-  @apply w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#ff6c37]/50 focus:border-[#ff6c37] transition-colors resize-y;
+  @apply w-full rounded-lg px-3 py-2 text-sm outline-none transition-all duration-200 resize-y;
+  background: var(--background-secondary);
+  border: 1px solid var(--border-bright);
+  color: var(--foreground);
   min-height: 100px;
 }
+.textarea-field::placeholder { color: var(--foreground-dim); }
+.textarea-field:focus {
+  border-color: rgba(6, 214, 214, 0.4);
+  box-shadow: 0 0 0 3px rgba(6, 214, 214, 0.08), 0 0 16px rgba(6, 214, 214, 0.06);
+}
+
+/* ==========================================================================
+   Utility Classes — Badges
+   ========================================================================== */
 
 .badge-success {
-  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400;
+  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.15);
 }
 
 .badge-warning {
-  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400;
+  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.15);
 }
 
 .badge-error {
-  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400;
+  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.15);
 }
 
 .badge-info {
-  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400;
+  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.15);
+}
+
+/* ==========================================================================
+   Animated Background Elements
+   ========================================================================== */
+
+@keyframes gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-6px); }
+}
+
+.animate-gradient {
+  background-size: 200% 200%;
+  animation: gradient-shift 8s ease infinite;
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 3s ease-in-out infinite;
+}
+
+/* Mesh gradient background for hero sections */
+.mesh-bg {
+  position: relative;
+  overflow: hidden;
+}
+.mesh-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 40%, rgba(6, 214, 214, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 80% 20%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse 50% 60% at 50% 80%, rgba(255, 108, 55, 0.04) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Grid pattern overlay */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* ==========================================================================
+   Prose overrides (brief viewer)
+   ========================================================================== */
+
+.prose {
+  --tw-prose-body: var(--foreground);
+  --tw-prose-headings: #f1f5f9;
+  --tw-prose-links: var(--accent-cyan);
+  --tw-prose-bold: #f1f5f9;
+  --tw-prose-counters: var(--foreground-muted);
+  --tw-prose-bullets: var(--foreground-dim);
+  --tw-prose-hr: var(--border);
+  --tw-prose-quotes: var(--foreground-muted);
+  --tw-prose-quote-borders: rgba(6, 214, 214, 0.3);
+  --tw-prose-captions: var(--foreground-muted);
+  --tw-prose-code: var(--accent-cyan);
+  --tw-prose-pre-code: var(--foreground);
+  --tw-prose-pre-bg: var(--background-secondary);
+  --tw-prose-th-borders: var(--border-bright);
+  --tw-prose-td-borders: var(--border);
+}
+
+/* ==========================================================================
+   Table overrides
+   ========================================================================== */
+
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+th {
+  color: var(--foreground-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   Hover cards (pure CSS — safe for server components)
+   ========================================================================== */
+
+.hover-card {
+  border: 1px solid transparent;
+  background: transparent;
+}
+.hover-card:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-bright);
+}
+
+/* ==========================================================================
+   Animations
+   ========================================================================== */
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+/* Subtle pulse for momentum indicators */
+@keyframes gentle-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.pulse-gentle {
+  animation: gentle-pulse 2s ease-in-out infinite;
 }

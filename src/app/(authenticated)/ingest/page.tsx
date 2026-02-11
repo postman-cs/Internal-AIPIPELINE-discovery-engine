@@ -31,7 +31,6 @@ export default async function IngestPage() {
       }),
     ]);
 
-  // Build stats
   const sourceStats: Record<string, { total: number; unconsumed: number }> = {};
   for (const item of totalBySource) {
     sourceStats[item.source] = { total: item._count.id, unconsumed: 0 };
@@ -40,14 +39,10 @@ export default async function IngestPage() {
     if (sourceStats[item.source]) {
       sourceStats[item.source].unconsumed = item._count.id;
     } else {
-      sourceStats[item.source] = {
-        total: item._count.id,
-        unconsumed: item._count.id,
-      };
+      sourceStats[item.source] = { total: item._count.id, unconsumed: item._count.id };
     }
   }
 
-  // Unconsumed counts
   const unconsumedCounts: Record<string, number> = {};
   for (const item of unconsumedBySource) {
     unconsumedCounts[item.source] = item._count.id;
@@ -57,15 +52,14 @@ export default async function IngestPage() {
   const allSourceMeta = ALL_SOURCES.map((s) => SOURCE_REGISTRY[s]);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+          <h1 className="text-2xl font-bold" style={{ color: "var(--foreground)" }}>
             Data Ingest
           </h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Connect sources, ingest customer signals, and manage your
-            intelligence pipeline
+          <p className="text-sm mt-1" style={{ color: "var(--foreground-dim)" }}>
+            Connect sources, ingest customer signals, and manage your intelligence pipeline
           </p>
         </div>
         <IngestActions connectedCount={connectedCount} />

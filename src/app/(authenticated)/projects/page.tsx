@@ -6,13 +6,13 @@ export default async function ProjectsPage() {
   const projects = await getProjects();
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+          <h1 className="text-2xl font-bold" style={{ color: "var(--foreground)" }}>
             Projects
           </h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm mt-1" style={{ color: "var(--foreground-dim)" }}>
             Manage your customer engagements
           </p>
         </div>
@@ -23,8 +23,8 @@ export default async function ProjectsPage() {
         <div className="lg:col-span-2">
           {projects.length === 0 ? (
             <div className="card text-center py-12">
-              <p className="text-gray-500 mb-4">No projects yet</p>
-              <p className="text-sm text-gray-400">
+              <p className="mb-4" style={{ color: "var(--foreground-muted)" }}>No projects yet</p>
+              <p className="text-sm" style={{ color: "var(--foreground-dim)" }}>
                 Create your first project using the form &rarr;
               </p>
             </div>
@@ -36,19 +36,19 @@ export default async function ProjectsPage() {
                   <Link
                     key={project.id}
                     href={`/projects/${project.id}`}
-                    className="card block hover:border-[#ff6c37]/30 transition-colors"
+                    className="card-glow block transition-all duration-200"
                   >
                     <div className="flex items-start justify-between">
                       <div>
-                        <h3 className="font-semibold text-gray-900 dark:text-gray-100">
+                        <h3 className="font-semibold" style={{ color: "var(--foreground)" }}>
                           {project.name}
                         </h3>
                         {project.primaryDomain && (
-                          <p className="text-sm text-gray-500 mt-0.5">
+                          <p className="text-sm mt-0.5" style={{ color: "var(--foreground-dim)" }}>
                             {project.primaryDomain}
                           </p>
                         )}
-                        <p className="text-xs text-gray-400 mt-1">
+                        <p className="text-xs mt-1" style={{ color: "var(--foreground-dim)" }}>
                           Updated{" "}
                           {project.updatedAt.toLocaleDateString()}
                         </p>

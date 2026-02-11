@@ -3,11 +3,7 @@
 import { useState, useTransition } from "react";
 import { runIngestAction } from "@/lib/actions/ingest";
 
-export function IngestActions({
-  connectedCount,
-}: {
-  connectedCount: number;
-}) {
+export function IngestActions({ connectedCount }: { connectedCount: number }) {
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
 
@@ -25,7 +21,7 @@ export function IngestActions({
   return (
     <div className="flex items-center gap-3">
       {message && (
-        <span className="text-sm text-green-600 dark:text-green-400 font-medium">
+        <span className="text-sm font-medium" style={{ color: "var(--accent-green)" }}>
           {message}
         </span>
       )}

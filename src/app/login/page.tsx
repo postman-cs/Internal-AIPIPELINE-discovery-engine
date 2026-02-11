@@ -9,21 +9,49 @@ export default function LoginPage() {
   const [state, action] = useActionState(loginAction, null);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-linear-to-br from-gray-50 to-white dark:from-gray-950 dark:to-gray-900 px-4">
-      <div className="w-full max-w-sm">
+    <div className="min-h-screen flex items-center justify-center px-4 relative overflow-hidden">
+      {/* Background */}
+      <div className="absolute inset-0 mesh-bg grid-bg" />
+      <div className="absolute top-1/3 left-1/3 w-80 h-80 bg-cyan-500/5 rounded-full blur-3xl animate-pulse-glow" />
+      <div className="absolute bottom-1/3 right-1/3 w-72 h-72 bg-purple-500/5 rounded-full blur-3xl animate-pulse-glow" style={{ animationDelay: "1s" }} />
+
+      <div className="w-full max-w-sm relative z-10">
         <div className="text-center mb-8">
-          <Link href="/" className="inline-block">
-            <div className="w-12 h-12 rounded-xl bg-[#ff6c37] flex items-center justify-center mx-auto mb-4">
-              <span className="text-white text-lg font-bold">AI</span>
+          <Link href="/" className="inline-block animate-float">
+            <div
+              className="w-14 h-14 rounded-xl flex items-center justify-center mx-auto mb-5"
+              style={{
+                background: "linear-gradient(135deg, #ff6c37, #e5552a)",
+                boxShadow: "0 0 30px rgba(255, 108, 55, 0.25)",
+              }}
+            >
+              <span className="text-white text-xl font-bold">AI</span>
             </div>
           </Link>
-          <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+          <h1 className="text-xl font-semibold" style={{ color: "var(--foreground)" }}>
             Sign in to AI Pipeline
           </h1>
+          <p className="text-sm mt-1" style={{ color: "var(--foreground-dim)" }}>
+            Enter your credentials to continue
+          </p>
         </div>
-        <form action={action} className="card space-y-4">
+
+        <form
+          action={action}
+          className="card-glass space-y-5"
+          style={{
+            boxShadow: "0 0 60px rgba(0,0,0,0.3), 0 0 1px rgba(255,255,255,0.06)",
+          }}
+        >
           {state?.error && (
-            <div className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 text-sm rounded-lg px-3 py-2">
+            <div
+              className="text-sm rounded-lg px-3 py-2"
+              style={{
+                background: "rgba(239, 68, 68, 0.1)",
+                border: "1px solid rgba(239, 68, 68, 0.2)",
+                color: "#f87171",
+              }}
+            >
               {state.error}
             </div>
           )}
@@ -55,10 +83,10 @@ export default function LoginPage() {
               defaultValue="pipeline123"
             />
           </div>
-          <SubmitButton pendingText="Signing in..." className="btn-primary w-full">
+          <SubmitButton pendingText="Signing in..." className="btn-primary w-full py-2.5">
             Sign In
           </SubmitButton>
-          <p className="text-xs text-gray-500 text-center mt-2">
+          <p className="text-xs text-center" style={{ color: "var(--foreground-dim)" }}>
             Dev credentials: cse@postman.com / pipeline123
           </p>
         </form>
