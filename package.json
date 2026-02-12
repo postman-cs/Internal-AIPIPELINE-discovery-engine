@@ -22,8 +22,7 @@
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     "docker:build": "docker compose build",
-    "health": "curl -s http://localhost:3000/api/health | jq",
-    "demo:k8": "bash scripts/demo-k8-jenkins.sh"
+    "health": "curl -s http://localhost:3000/api/health | jq"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
