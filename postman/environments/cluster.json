@@ -1,0 +1,25 @@
+{
+  "id": "cluster-env",
+  "name": "In-Cluster Environment",
+  "values": [
+    {
+      "key": "base_url",
+      "value": "http://circles-service",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "client_id",
+      "value": "demo-client",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "client_secret",
+      "value": "demo-secret",
+      "type": "secret",
+      "enabled": true
+    }
+  ],
+  "_postman_variable_scope": "environment"
+}

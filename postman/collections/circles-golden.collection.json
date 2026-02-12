@@ -1,0 +1,165 @@
+{
+  "info": {
+    "_postman_id": "circles-golden-demo",
+    "name": "Circles Golden Path — In-Cluster Demo",
+    "description": "Simulates a Jenkins-triggered Newman run against an in-cluster mock.\n\n1. Authenticate via OAuth client-credentials\n2. Verify the token is present\n3. Hit a protected endpoint with the bearer token\n4. Validate the response schema",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "access_token", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1 — Authenticate (Client Credentials)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Response has access_token', function () {",
+              "    var json = pm.response.json();",
+              "    pm.expect(json).to.have.property('access_token');",
+              "    pm.expect(json.access_token).to.be.a('string').and.not.empty;",
+              "    pm.collectionVariables.set('access_token', json.access_token);",
+              "});",
+              "",
+              "pm.test('Token type is Bearer', function () {",
+              "    var json = pm.response.json();",
+              "    pm.expect(json.token_type).to.eql('Bearer');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/x-www-form-urlencoded" }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type",    "value": "client_credentials" },
+            { "key": "client_id",     "value": "{{client_id}}" },
+            { "key": "client_secret", "value": "{{client_secret}}" }
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/oauth/token",
+          "host": ["{{base_url}}"],
+          "path": ["oauth", "token"]
+        }
+      }
+    },
+    {
+      "name": "2 — Verify Token Set",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('access_token collection variable is set', function () {",
+              "    var token = pm.collectionVariables.get('access_token');",
+              "    pm.expect(token).to.be.a('string').and.not.empty;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/healthz",
+          "host": ["{{base_url}}"],
+          "path": ["healthz"]
+        }
+      }
+    },
+    {
+      "name": "3 — Protected Resource (Bearer Token)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Response has data array', function () {",
+              "    var json = pm.response.json();",
+              "    pm.expect(json).to.have.property('data');",
+              "    pm.expect(json.data).to.be.an('array');",
+              "});",
+              "",
+              "pm.test('Each item has id and name', function () {",
+              "    var items = pm.response.json().data;",
+              "    items.forEach(function(item) {",
+              "        pm.expect(item).to.have.property('id');",
+              "        pm.expect(item).to.have.property('name');",
+              "    });",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/circles",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "circles"]
+        }
+      }
+    },
+    {
+      "name": "4 — Create Resource",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 201', function () {",
+              "    pm.response.to.have.status(201);",
+              "});",
+              "",
+              "pm.test('Response contains created resource', function () {",
+              "    var json = pm.response.json();",
+              "    pm.expect(json).to.have.property('id');",
+              "    pm.expect(json.name).to.eql('Newman Demo Circle');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}" },
+          { "key": "Content-Type",  "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{ \"name\": \"Newman Demo Circle\", \"description\": \"Created by in-cluster Newman job\" }"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/circles",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "circles"]
+        }
+      }
+    }
+  ]
+}
