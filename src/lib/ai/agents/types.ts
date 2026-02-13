@@ -197,6 +197,31 @@ export const pipelineResultSchema = z.object({
   aiRunIds: z.array(z.string()),
   allCitations: z.array(evidenceCitationSchema),
   validatedEvidenceIds: z.array(z.string()),
+  /** Assumptions surfaced by discovery sub-agents for human verification */
+  assumptions: z.array(z.object({
+    category: z.string(),
+    claim: z.string(),
+    reasoning: z.string(),
+    confidence: z.string(),
+    evidenceIds: z.array(z.string()),
+    impact: z.string(),
+    blocksPhases: z.array(z.string()),
+    suggestedVerification: z.string().optional(),
+  })).optional(),
+  /** Blockers detected from the customer/external landscape */
+  detectedBlockers: z.array(z.object({
+    title: z.string(),
+    description: z.string(),
+    domain: z.string(),
+    severity: z.string(),
+    rootCause: z.string(),
+    rootCauseCategory: z.string(),
+    blockedCapabilities: z.array(z.string()),
+    blockedPhases: z.array(z.string()),
+    evidenceIds: z.array(z.string()),
+    suggestedMissile: z.string().optional(),
+    suggestedNukeRationale: z.string().optional(),
+  })).optional(),
 });
 
 export type PipelineResult = z.infer<typeof pipelineResultSchema>;

@@ -17,6 +17,7 @@ import {
   ReconSynthesizerOutput,
   SignalClassifierOutput,
 } from "./types";
+import type { AssumptionItem, BlockerDetection } from "./topologyTypes";
 
 const SYSTEM_PROMPT = `You are an API maturity assessment specialist for a Postman CSE team.
 
@@ -53,7 +54,7 @@ export async function runMaturityScorer(
   projectName: string,
   reconOutput: ReconSynthesizerOutput,
   signalOutput: SignalClassifierOutput
-): Promise<{ output: MaturityScorerOutput; aiRunId: string }> {
+): Promise<{ output: MaturityScorerOutput; aiRunId: string; assumptions: AssumptionItem[]; detectedBlockers: BlockerDetection[] }> {
   const evidence = await retrieveMultiQueryEvidence(projectId, [
     `${projectName} API program maturity governance strategy`,
     `${projectName} developer portal documentation SDK`,
@@ -90,5 +91,5 @@ Produce the maturity score JSON. Only reference evidence IDs from the list above
     outputSchema: maturityScorerOutputSchema,
   });
 
-  return { output: result.output, aiRunId: result.aiRunId };
+  return { output: result.output, aiRunId: result.aiRunId, assumptions: result.assumptions, detectedBlockers: result.detectedBlockers };
 }

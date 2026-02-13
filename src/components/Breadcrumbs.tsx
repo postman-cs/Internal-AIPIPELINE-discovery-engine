@@ -12,6 +12,7 @@ const ROUTE_LABELS: Record<string, string> = {
   topology: "Topology",
   updates: "Cascade Updates",
   brief: "Brief",
+  cicd: "CI/CD Playbook",
 };
 
 export function Breadcrumbs() {
@@ -54,10 +55,8 @@ export function Breadcrumbs() {
             ) : (
               <Link
                 href={crumb.href}
-                className="transition-colors duration-200"
+                className="transition-colors duration-200 breadcrumb-link"
                 style={{ color: "var(--foreground-dim)" }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent-cyan)")}
-                onMouseLeave={(e) => (e.currentTarget.style.color = "var(--foreground-dim)")}
               >
                 {crumb.label}
               </Link>

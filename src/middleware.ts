@@ -12,6 +12,7 @@ const PUBLIC_EXACT_PATHS = new Set([
   "/api/cron/daily-ingest",
   "/api/health",
   "/api/webhooks/ingest",
+  "/api/webhooks/newman-results",
 ]);
 
 // ---------------------------------------------------------------------------

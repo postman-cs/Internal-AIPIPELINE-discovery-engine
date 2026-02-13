@@ -14,13 +14,13 @@ import {
 } from "@/lib/cascade/phases";
 
 describe("PHASE_GRAPH structure", () => {
-  it("has 10 phases", () => {
-    expect(PHASE_GRAPH).toHaveLength(10);
+  it("has 11 phases", () => {
+    expect(PHASE_GRAPH).toHaveLength(11);
   });
 
   it("all phases have unique names", () => {
     const names = PHASE_GRAPH.map((p) => p.phase);
-    expect(new Set(names).size).toBe(10);
+    expect(new Set(names).size).toBe(11);
   });
 
   it("all phases are marked as implemented", () => {
@@ -62,8 +62,9 @@ describe("getPhaseNode", () => {
 describe("getDownstream", () => {
   it("DISCOVERY affects all downstream phases", () => {
     const downstream = getDownstream("DISCOVERY");
-    expect(downstream.length).toBe(9); // All 9 other phases
+    expect(downstream.length).toBe(10); // All 10 other phases
     expect(downstream).toContain("CURRENT_TOPOLOGY");
+    expect(downstream).toContain("INFRASTRUCTURE");
     expect(downstream).toContain("ITERATION");
   });
 
@@ -88,14 +89,14 @@ describe("getDownstream", () => {
 });
 
 describe("getAllPhasesOrdered", () => {
-  it("returns all 10 phases", () => {
-    expect(getAllPhasesOrdered()).toHaveLength(10);
+  it("returns all 11 phases", () => {
+    expect(getAllPhasesOrdered()).toHaveLength(11);
   });
 
   it("starts with DISCOVERY and ends with ITERATION", () => {
     const ordered = getAllPhasesOrdered();
     expect(ordered[0]).toBe("DISCOVERY");
-    expect(ordered[9]).toBe("ITERATION");
+    expect(ordered[10]).toBe("ITERATION");
   });
 });
 
@@ -123,9 +124,9 @@ describe("isUpstreamOf", () => {
 describe("cascade status transitions", () => {
   // These test the logical rules — actual DB tests would be integration tests
 
-  it("accepting DISCOVERY should dirty 9 downstream phases", () => {
+  it("accepting DISCOVERY should dirty 10 downstream phases", () => {
     const downstream = getDownstream("DISCOVERY");
-    expect(downstream.length).toBe(9);
+    expect(downstream.length).toBe(10);
   });
 
   it("accepting CURRENT_TOPOLOGY dirties correct phases", () => {
@@ -135,8 +136,9 @@ describe("cascade status transitions", () => {
     expect(downstream).not.toContain("DISCOVERY"); // Not upstream
   });
 
-  it("accepting SOLUTION_DESIGN dirties TEST_DESIGN and downstream", () => {
+  it("accepting SOLUTION_DESIGN dirties INFRASTRUCTURE, TEST_DESIGN and downstream", () => {
     const downstream = getDownstream("SOLUTION_DESIGN");
+    expect(downstream).toContain("INFRASTRUCTURE");
     expect(downstream).toContain("TEST_DESIGN");
     expect(downstream).toContain("CRAFT_SOLUTION");
     expect(downstream).toContain("TEST_SOLUTION");

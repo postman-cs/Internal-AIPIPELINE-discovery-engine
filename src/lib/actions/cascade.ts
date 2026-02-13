@@ -19,6 +19,7 @@ import { createEvidenceSnapshot } from "@/lib/cascade/snapshot";
 import { runImpactAnalysis, markDownstreamDirty } from "@/lib/cascade/impact";
 import { executeRecomputeJob } from "@/lib/cascade/recompute";
 import { PHASE_GRAPH, getPhaseNode } from "@/lib/cascade/phases";
+import { getVerificationSummary } from "@/lib/assumptions/engine";
 
 // ---------------------------------------------------------------------------
 // Trigger cascade update (Manual)
@@ -28,7 +29,20 @@ import { PHASE_GRAPH, getPhaseNode } from "@/lib/cascade/phases";
  * Manually trigger a cascade update for a project.
  * Creates a new EvidenceSnapshot, runs impact analysis, then executes recompute.
  */
-export async function triggerCascadeUpdate(projectId: string) {
+export async function triggerCascadeUpdate(
+  projectId: string,
+  options?: {
+    /**
+     * If true, the cascade will pause at each phase that has unverified
+     * High-confidence assumptions. The human must verify/correct them
+     * before the cascade continues to downstream phases.
+     *
+     * If false (default), all phases run eagerly and assumptions are
+     * surfaced for review afterward.
+     */
+    gatedMode?: boolean;
+  }
+) {
   const session = await requireAuth();
 
   const project = await prisma.project.findFirst({
@@ -55,10 +69,16 @@ export async function triggerCascadeUpdate(projectId: string) {
       "MANUAL"
     );
 
-    // 3. Execute the recompute job (runs Discovery pipeline, creates proposals)
-    const result = await executeRecomputeJob(impact.jobId);
+    // 3. Execute the recompute job (runs agents, creates proposals, extracts assumptions)
+    const result = await executeRecomputeJob(impact.jobId, {
+      gatedMode: options?.gatedMode,
+    });
+
+    // 4. Get assumption verification summary
+    const assumptionSummary = await getVerificationSummary(projectId);
 
     revalidatePath(`/projects/${projectId}/updates`);
+    revalidatePath(`/projects/${projectId}/assumptions`);
     revalidatePath(`/projects/${projectId}`);
 
     return {
@@ -70,6 +90,16 @@ export async function triggerCascadeUpdate(projectId: string) {
       proposalCount: result.proposals.length,
       errors: result.errors,
       skipped: result.skipped,
+      // Assumption verification status
+      assumptionSummary: {
+        total: assumptionSummary.totalAssumptions,
+        pending: assumptionSummary.pending,
+        verified: assumptionSummary.verified,
+        corrected: assumptionSummary.corrected,
+        rejected: assumptionSummary.rejected,
+        criticalPendingCount: assumptionSummary.criticalPending.length,
+      },
+      pausedAtPhase: result.pausedAtPhase,
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Cascade update failed";
@@ -261,6 +291,7 @@ export async function getCascadeState(projectId: string) {
     artifacts,
     proposals,
     jobs,
+    assumptions,
   ] = await Promise.all([
     prisma.evidenceSnapshot.findMany({
       where: { projectId },
@@ -281,6 +312,10 @@ export async function getCascadeState(projectId: string) {
       orderBy: { startedAt: "desc" },
       take: 5,
       include: { tasks: true },
+    }),
+    prisma.assumption.findMany({
+      where: { projectId },
+      orderBy: [{ phase: "asc" }, { createdAt: "asc" }],
     }),
   ]);
 
@@ -305,9 +340,22 @@ export async function getCascadeState(projectId: string) {
     }
   }
 
+  // Build assumption counts per phase
+  const phaseAssumptionCounts = new Map<string, { total: number; pending: number; verified: number; corrected: number; rejected: number }>();
+  for (const a of assumptions) {
+    const existing = phaseAssumptionCounts.get(a.phase) ?? { total: 0, pending: 0, verified: 0, corrected: 0, rejected: 0 };
+    existing.total++;
+    if (a.status === "PENDING") existing.pending++;
+    if (a.status === "VERIFIED" || a.status === "AUTO_VERIFIED") existing.verified++;
+    if (a.status === "CORRECTED") existing.corrected++;
+    if (a.status === "REJECTED") existing.rejected++;
+    phaseAssumptionCounts.set(a.phase, existing);
+  }
+
   // Build phase graph view
   const phaseGraph = PHASE_GRAPH.map((node) => {
     const state = phaseStatus.get(node.phase);
+    const assumptionCounts = phaseAssumptionCounts.get(node.phase);
     return {
       phase: node.phase,
       label: node.label,
@@ -321,11 +369,19 @@ export async function getCascadeState(projectId: string) {
       snapshotId: state?.snapshotId ?? null,
       lastComputedAt: state?.lastComputedAt?.toISOString() ?? null,
       hasArtifact: state?.hasArtifact ?? false,
+      // Assumption verification status for this phase
+      assumptions: assumptionCounts ?? { total: 0, pending: 0, verified: 0, corrected: 0, rejected: 0 },
     };
   });
 
   // Pending proposals
   const pendingProposals = proposals.filter((p) => p.status === "PENDING");
+
+  // Assumption verification summary
+  const totalPending = assumptions.filter((a) => a.status === "PENDING").length;
+  const totalCriticalPending = assumptions.filter(
+    (a) => a.status === "PENDING" && a.confidence === "High"
+  ).length;
 
   return {
     snapshots: snapshots.map((s) => ({
@@ -359,6 +415,13 @@ export async function getCascadeState(projectId: string) {
       completedTasks: j.tasks.filter((t) => t.status === "COMPLETED").length,
       failedTasks: j.tasks.filter((t) => t.status === "FAILED").length,
     })),
+    // Assumption verification health
+    assumptionHealth: {
+      totalAssumptions: assumptions.length,
+      pendingVerification: totalPending,
+      criticalPending: totalCriticalPending,
+      allClear: totalCriticalPending === 0,
+    },
   };
 }
 

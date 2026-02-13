@@ -9,6 +9,7 @@
 import { retrieveMultiQueryEvidence, formatEvidenceForPrompt } from "@/lib/ai/retrieval";
 import { runAgent } from "./runner";
 import { signalClassifierOutputSchema, SignalClassifierOutput, ReconSynthesizerOutput } from "./types";
+import type { AssumptionItem, BlockerDetection } from "./topologyTypes";
 
 const SYSTEM_PROMPT = `You are a technical signal classifier for a Postman CSE team.
 
@@ -43,7 +44,7 @@ export async function runSignalClassifier(
   projectId: string,
   projectName: string,
   reconOutput: ReconSynthesizerOutput
-): Promise<{ output: SignalClassifierOutput; aiRunId: string }> {
+): Promise<{ output: SignalClassifierOutput; aiRunId: string; assumptions: AssumptionItem[]; detectedBlockers: BlockerDetection[] }> {
   const evidence = await retrieveMultiQueryEvidence(projectId, [
     `${projectName} cloud provider AWS GCP Azure infrastructure`,
     `${projectName} CDN edge network CloudFront Cloudflare`,
@@ -77,5 +78,5 @@ Only reference evidence IDs from the list above.`;
     outputSchema: signalClassifierOutputSchema,
   });
 
-  return { output: result.output, aiRunId: result.aiRunId };
+  return { output: result.output, aiRunId: result.aiRunId, assumptions: result.assumptions, detectedBlockers: result.detectedBlockers };
 }

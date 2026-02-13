@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { timingSafeEqual } from "crypto";
 
 const MOCK_TITLES: Record<string, string[]> = {
   GMAIL: ["Re: API Gateway discussion", "Follow-up: Security review"],
@@ -11,6 +12,11 @@ const MOCK_TITLES: Record<string, string[]> = {
   MANUAL_UPLOAD: ["Architecture diagram.pdf"],
 };
 
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
 export async function POST(request: NextRequest) {
   // Require CRON_SECRET — no fallback default
   const cronSecret = process.env.CRON_SECRET;
@@ -19,16 +25,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
   }
 
-  const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${cronSecret}`) {
+  const authHeader = request.headers.get("authorization") ?? "";
+  const expected = `Bearer ${cronSecret}`;
+  if (!safeCompare(authHeader, expected)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Find any user to attribute the cron run to
-  const user = await prisma.user.findFirst();
+  // Attribute cron runs to the admin user (not an arbitrary user)
+  const user = await prisma.user.findFirst({
+    where: { isAdmin: true },
+    orderBy: { createdAt: "asc" },
+  });
   if (!user) {
     return NextResponse.json(
-      { error: "No users found. Seed the database first." },
+      { error: "No admin user found. Seed the database first." },
       { status: 500 }
     );
   }

@@ -14,6 +14,7 @@ import {
   SignalClassifierOutput,
   MaturityScorerOutput,
 } from "./types";
+import type { AssumptionItem, BlockerDetection } from "./topologyTypes";
 
 const SYSTEM_PROMPT = `You are a CSE engagement strategist for Postman.
 
@@ -56,7 +57,7 @@ export async function runHypothesisGenerator(
   reconOutput: ReconSynthesizerOutput,
   signalOutput: SignalClassifierOutput,
   maturityOutput: MaturityScorerOutput
-): Promise<{ output: HypothesisGeneratorOutput; aiRunId: string }> {
+): Promise<{ output: HypothesisGeneratorOutput; aiRunId: string; assumptions: AssumptionItem[]; detectedBlockers: BlockerDetection[] }> {
   const evidence = await retrieveMultiQueryEvidence(projectId, [
     `${projectName} pain points challenges developer experience`,
     `${projectName} API strategy goals priorities roadmap`,
@@ -99,5 +100,5 @@ Produce the hypothesis JSON. Only reference evidence IDs from the list above.`;
     outputSchema: hypothesisGeneratorOutputSchema,
   });
 
-  return { output: result.output, aiRunId: result.aiRunId };
+  return { output: result.output, aiRunId: result.aiRunId, assumptions: result.assumptions, detectedBlockers: result.detectedBlockers };
 }

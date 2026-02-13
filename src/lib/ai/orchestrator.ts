@@ -59,6 +59,8 @@ export async function runDiscoveryPipeline(
   const aiRunIds: string[] = [];
   const allCitations: EvidenceCitation[] = [];
   const allReferencedIds = new Set<string>();
+  const allAssumptions: NonNullable<PipelineResult["assumptions"]> = [];
+  const allDetectedBlockers: NonNullable<PipelineResult["detectedBlockers"]> = [];
   let stepIndex = 0;
 
   // Pre-fetch the full set of valid evidence labels for this project
@@ -75,6 +77,8 @@ export async function runDiscoveryPipeline(
   const recon = await runReconSynthesizer(projectId, projectName);
   aiRunIds.push(recon.aiRunId);
   allCitations.push(...recon.output.citations);
+  if (recon.assumptions?.length) allAssumptions.push(...recon.assumptions);
+  if (recon.detectedBlockers?.length) allDetectedBlockers.push(...recon.detectedBlockers);
 
   // Validate evidence IDs
   const reconIds = extractEvidenceIds(recon.output);
@@ -93,6 +97,8 @@ export async function runDiscoveryPipeline(
   );
   aiRunIds.push(signals.aiRunId);
   allCitations.push(...signals.output.citations);
+  if (signals.assumptions?.length) allAssumptions.push(...signals.assumptions);
+  if (signals.detectedBlockers?.length) allDetectedBlockers.push(...signals.detectedBlockers);
 
   const signalIds = extractEvidenceIds(signals.output);
   validateEvidenceIds(signalIds, validLabels, STEPS[1]);
@@ -111,6 +117,8 @@ export async function runDiscoveryPipeline(
   );
   aiRunIds.push(maturity.aiRunId);
   allCitations.push(...maturity.output.citations);
+  if (maturity.assumptions?.length) allAssumptions.push(...maturity.assumptions);
+  if (maturity.detectedBlockers?.length) allDetectedBlockers.push(...maturity.detectedBlockers);
 
   const maturityIds = extractEvidenceIds(maturity.output);
   validateEvidenceIds(maturityIds, validLabels, STEPS[2]);
@@ -130,6 +138,8 @@ export async function runDiscoveryPipeline(
   );
   aiRunIds.push(hypothesis.aiRunId);
   allCitations.push(...hypothesis.output.citations);
+  if (hypothesis.assumptions?.length) allAssumptions.push(...hypothesis.assumptions);
+  if (hypothesis.detectedBlockers?.length) allDetectedBlockers.push(...hypothesis.detectedBlockers);
 
   const hypothesisIds = extractEvidenceIds(hypothesis.output);
   validateEvidenceIds(hypothesisIds, validLabels, STEPS[3]);
@@ -155,6 +165,8 @@ export async function runDiscoveryPipeline(
   );
   aiRunIds.push(brief.aiRunId);
   allCitations.push(...brief.output.allCitations);
+  if (brief.assumptions?.length) allAssumptions.push(...brief.assumptions);
+  if (brief.detectedBlockers?.length) allDetectedBlockers.push(...brief.detectedBlockers);
 
   const briefIds = extractEvidenceIds(brief.output);
   validateEvidenceIds(briefIds, validLabels, STEPS[4]);
@@ -174,6 +186,8 @@ export async function runDiscoveryPipeline(
     aiRunIds,
     allCitations: uniqueCitations,
     validatedEvidenceIds: Array.from(allReferencedIds),
+    assumptions: allAssumptions,
+    detectedBlockers: allDetectedBlockers,
   };
 }
 

@@ -1,3 +1,10 @@
+/**
+ * OpenAI client — used for embeddings and as the default LLM provider.
+ *
+ * For multi-model routing (OpenAI + Anthropic), see model-router.ts.
+ * This file is kept for backward compatibility and embedding operations.
+ */
+
 import OpenAI from "openai";
 
 const globalForOpenAI = globalThis as unknown as { openai: OpenAI };
@@ -10,6 +17,8 @@ if (process.env.NODE_ENV !== "production") globalForOpenAI.openai = openai;
 
 export const EMBEDDING_MODEL = "text-embedding-3-large";
 export const EMBEDDING_DIMENSIONS = 3072;
+
+/** @deprecated Use model-router.ts selectModel() instead */
 export const LLM_MODEL = "gpt-4.1";
 
 /**

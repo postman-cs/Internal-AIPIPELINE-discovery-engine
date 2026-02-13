@@ -8,7 +8,7 @@
 
 import { retrieveMultiQueryEvidence, formatEvidenceForPrompt } from "@/lib/ai/retrieval";
 import { runAgent } from "./runner";
-import { solutionDesignOutputSchema, type SolutionDesignOutput } from "./topologyTypes";
+import { solutionDesignOutputSchema, type SolutionDesignOutput, type AssumptionItem, type BlockerDetection } from "./topologyTypes";
 
 const SYSTEM_PROMPT = `You are a solution architect for Postman's CSE team.
 
@@ -35,7 +35,7 @@ export async function runSolutionDesigner(
   currentTopologyContent: Record<string, unknown>,
   futureStateContent: Record<string, unknown>,
   discoveryContent: Record<string, unknown>
-): Promise<{ output: SolutionDesignOutput; aiRunId: string }> {
+): Promise<{ output: SolutionDesignOutput; aiRunId: string; assumptions: AssumptionItem[]; detectedBlockers: BlockerDetection[] }> {
   const evidence = await retrieveMultiQueryEvidence(projectId, [
     `${projectName} API migration refactoring strategy`,
     `${projectName} infrastructure change management risks`,
@@ -77,5 +77,5 @@ Produce the solution design JSON.`;
     outputSchema: solutionDesignOutputSchema,
   });
 
-  return { output: result.output, aiRunId: result.aiRunId };
+  return { output: result.output, aiRunId: result.aiRunId, assumptions: result.assumptions, detectedBlockers: result.detectedBlockers };
 }

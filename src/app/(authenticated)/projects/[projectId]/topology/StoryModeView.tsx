@@ -78,11 +78,17 @@ export default function StoryModeView({
     setPolishing(true);
     try {
       const result = await polishStoryOutline(projectId, outline);
-      const beatMap = new Map<string, string>();
-      for (const b of result.beats) {
-        beatMap.set(b.id, b.polishedSpeakerNotes);
+      if ("error" in result && result.error) {
+        console.error("Story polish failed:", result.error);
+        return;
       }
-      setPolishedData({ talkTrack: result.talkTrack, beatNotes: beatMap });
+      if ("beats" in result) {
+        const beatMap = new Map<string, string>();
+        for (const b of result.beats) {
+          beatMap.set(b.id, b.polishedSpeakerNotes);
+        }
+        setPolishedData({ talkTrack: result.talkTrack, beatNotes: beatMap });
+      }
     } catch (err) {
       console.error("Story polish failed:", err);
     } finally {

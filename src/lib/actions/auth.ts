@@ -34,9 +34,10 @@ export async function loginAction(_prev: unknown, formData: FormData) {
   session.userId = user.id;
   session.email = user.email;
   session.name = user.name;
+  session.isAdmin = user.isAdmin;
   await session.save();
 
-  redirect("/dashboard");
+  redirect(user.isAdmin ? "/admin" : "/dashboard");
 }
 
 export async function logoutAction() {

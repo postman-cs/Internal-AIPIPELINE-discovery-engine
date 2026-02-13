@@ -16,6 +16,7 @@ import {
   HypothesisGeneratorOutput,
   EvidenceAppendixEntry,
 } from "./types";
+import type { AssumptionItem, BlockerDetection } from "./topologyTypes";
 
 const SYSTEM_PROMPT = `You are a discovery brief writer for a Postman CSE team.
 
@@ -105,7 +106,7 @@ export async function runBriefGenerator(
   maturityOutput: MaturityScorerOutput,
   hypothesisOutput: HypothesisGeneratorOutput,
   evidenceAppendix: EvidenceAppendixEntry[]
-): Promise<{ output: BriefGeneratorOutput; aiRunId: string }> {
+): Promise<{ output: BriefGeneratorOutput; aiRunId: string; assumptions: AssumptionItem[]; detectedBlockers: BlockerDetection[] }> {
   const appendixBlock = evidenceAppendix.length > 0
     ? evidenceAppendix
         .map(
@@ -148,5 +149,5 @@ Only reference evidence IDs from the list above.`;
     outputSchema: briefGeneratorOutputSchema,
   });
 
-  return { output: result.output, aiRunId: result.aiRunId };
+  return { output: result.output, aiRunId: result.aiRunId, assumptions: result.assumptions, detectedBlockers: result.detectedBlockers };
 }

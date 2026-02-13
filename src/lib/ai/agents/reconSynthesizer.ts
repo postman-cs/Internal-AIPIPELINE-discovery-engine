@@ -8,6 +8,7 @@
 import { retrieveMultiQueryEvidence, formatEvidenceForPrompt } from "@/lib/ai/retrieval";
 import { runAgent } from "./runner";
 import { reconSynthesizerOutputSchema, ReconSynthesizerOutput } from "./types";
+import type { AssumptionItem, BlockerDetection } from "./topologyTypes";
 
 const SYSTEM_PROMPT = `You are a technical reconnaissance analyst for a Postman Customer Success Engineering team.
 
@@ -53,7 +54,7 @@ OUTPUT: Return a JSON object with this exact structure:
 export async function runReconSynthesizer(
   projectId: string,
   projectName: string
-): Promise<{ output: ReconSynthesizerOutput; aiRunId: string }> {
+): Promise<{ output: ReconSynthesizerOutput; aiRunId: string; assumptions: AssumptionItem[]; detectedBlockers: BlockerDetection[] }> {
   // Retrieve evidence with multiple reconnaissance-focused queries
   const evidence = await retrieveMultiQueryEvidence(projectId, [
     `${projectName} company overview industry engineering team size`,
@@ -84,5 +85,5 @@ Produce the structured JSON output. Only reference evidence IDs from the list ab
     outputSchema: reconSynthesizerOutputSchema,
   });
 
-  return { output: result.output, aiRunId: result.aiRunId };
+  return { output: result.output, aiRunId: result.aiRunId, assumptions: result.assumptions, detectedBlockers: result.detectedBlockers };
 }

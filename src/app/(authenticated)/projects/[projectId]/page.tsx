@@ -20,7 +20,7 @@ export default async function ProjectOverviewPage({
   if (!project) notFound();
 
   const session = await requireAuth();
-  const [evidenceStats, notes, phaseArtifacts, recentAIRuns] = await Promise.all([
+  const [evidenceStats, notes, phaseArtifacts, recentAIRuns, assumptionCounts, blockerCounts] = await Promise.all([
     getProjectEvidenceStats(projectId),
     getNotes(projectId),
     prisma.phaseArtifact.findMany({
@@ -35,7 +35,31 @@ export default async function ProjectOverviewPage({
       take: 5,
       select: { id: true, agentType: true, status: true, durationMs: true, createdAt: true },
     }),
+    prisma.assumption.groupBy({
+      by: ["status"],
+      where: { projectId },
+      _count: true,
+    }),
+    prisma.blocker.groupBy({
+      by: ["status"],
+      where: { projectId },
+      _count: true,
+    }),
   ]);
+
+  const assumptionStats = {
+    total: assumptionCounts.reduce((s, g) => s + g._count, 0),
+    pending: assumptionCounts.find((g) => g.status === "PENDING")?._count ?? 0,
+    verified: assumptionCounts.find((g) => g.status === "VERIFIED")?._count ?? 0,
+    corrected: assumptionCounts.find((g) => g.status === "CORRECTED")?._count ?? 0,
+    rejected: assumptionCounts.find((g) => g.status === "REJECTED")?._count ?? 0,
+  };
+
+  const blockerStats = {
+    total: blockerCounts.reduce((s, g) => s + g._count, 0),
+    active: blockerCounts.filter((g) => !["NEUTRALIZED", "ACCEPTED", "DORMANT"].includes(g.status)).reduce((s, g) => s + g._count, 0),
+    neutralized: blockerCounts.find((g) => g.status === "NEUTRALIZED")?._count ?? 0,
+  };
 
   const latestArtifact = project.discoveryArtifacts[0];
   const fields = countDiscoveryFields(latestArtifact as unknown as Record<string, unknown>);
@@ -157,6 +181,90 @@ export default async function ProjectOverviewPage({
             </div>
           )}
         </div>
+
+        {/* Assumption Verification Health */}
+        <Link href={`/projects/${project.id}/assumptions`} className="card group transition-all duration-200 hover:border-[var(--accent-cyan)]">
+          <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--foreground)" }}>
+            Assumption Verification
+          </h2>
+          {assumptionStats.total > 0 ? (
+            <>
+              <div className="grid grid-cols-4 gap-2 mb-3">
+                <div className="text-center">
+                  <p className="text-lg font-bold tabular-nums" style={{ color: assumptionStats.pending > 0 ? "#fbbf24" : "var(--foreground-dim)" }}>{assumptionStats.pending}</p>
+                  <p className="text-[9px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Pending</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-bold tabular-nums" style={{ color: "#34d399" }}>{assumptionStats.verified}</p>
+                  <p className="text-[9px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Verified</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-bold tabular-nums" style={{ color: "#60a5fa" }}>{assumptionStats.corrected}</p>
+                  <p className="text-[9px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Corrected</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-bold tabular-nums" style={{ color: "#f87171" }}>{assumptionStats.rejected}</p>
+                  <p className="text-[9px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Rejected</p>
+                </div>
+              </div>
+              {/* Health bar */}
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{
+                    width: `${Math.round(((assumptionStats.verified + assumptionStats.corrected) / assumptionStats.total) * 100)}%`,
+                    background: "linear-gradient(90deg, #34d399, #06d6d6)",
+                  }}
+                />
+              </div>
+              <p className="text-[10px] text-right mt-1" style={{ color: "var(--foreground-dim)" }}>
+                {Math.round(((assumptionStats.verified + assumptionStats.corrected) / assumptionStats.total) * 100)}% verified
+              </p>
+            </>
+          ) : (
+            <p className="text-sm" style={{ color: "var(--foreground-dim)" }}>No assumptions generated yet. Run the AI pipeline to get started.</p>
+          )}
+        </Link>
+
+        {/* Blocker Status */}
+        <Link href={`/projects/${project.id}/blockers`} className="card group transition-all duration-200 hover:border-[var(--accent-cyan)]">
+          <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--foreground)" }}>
+            Blocker Status
+          </h2>
+          {blockerStats.total > 0 ? (
+            <>
+              <div className="grid grid-cols-3 gap-3 mb-3">
+                <div className="text-center">
+                  <p className="text-lg font-bold tabular-nums" style={{ color: "var(--foreground)" }}>{blockerStats.total}</p>
+                  <p className="text-[9px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Total</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-bold tabular-nums" style={{ color: blockerStats.active > 0 ? "#f59e0b" : "var(--foreground-dim)" }}>{blockerStats.active}</p>
+                  <p className="text-[9px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Active</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-bold tabular-nums" style={{ color: "#34d399" }}>{blockerStats.neutralized}</p>
+                  <p className="text-[9px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Neutralized</p>
+                </div>
+              </div>
+              {/* Neutralization bar */}
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{
+                    width: `${blockerStats.total > 0 ? Math.round((blockerStats.neutralized / blockerStats.total) * 100) : 0}%`,
+                    background: "linear-gradient(90deg, #34d399, #06d6d6)",
+                  }}
+                />
+              </div>
+              <p className="text-[10px] text-right mt-1" style={{ color: "var(--foreground-dim)" }}>
+                {blockerStats.total > 0 ? Math.round((blockerStats.neutralized / blockerStats.total) * 100) : 0}% neutralized
+              </p>
+            </>
+          ) : (
+            <p className="text-sm" style={{ color: "var(--foreground-dim)" }}>No blockers detected. The pipeline is clear.</p>
+          )}
+        </Link>
 
         {/* Recent Activity */}
         <div className="card">

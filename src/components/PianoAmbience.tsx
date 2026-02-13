@@ -202,12 +202,24 @@ export function PianoAmbience() {
     return () => document.removeEventListener("click", handleClick);
   }, [handleClick]);
 
+  // Close AudioContext on unmount to prevent resource leak
+  useEffect(() => {
+    return () => {
+      ctxRef.current?.close();
+      ctxRef.current = null;
+    };
+  }, []);
+
   // Load mute preference from localStorage
   useEffect(() => {
-    const saved = localStorage.getItem("piano-ambience-muted");
-    if (saved === "false") {
-      setMuted(false);
-      initAudio();
+    try {
+      const saved = localStorage.getItem("piano-ambience-muted");
+      if (saved === "false") {
+        setMuted(false);
+        initAudio();
+      }
+    } catch {
+      // localStorage unavailable (e.g. Safari private browsing)
     }
   }, [initAudio]);
 
@@ -215,7 +227,11 @@ export function PianoAmbience() {
     if (!initialized) initAudio();
     const next = !muted;
     setMuted(next);
-    localStorage.setItem("piano-ambience-muted", String(next));
+    try {
+      localStorage.setItem("piano-ambience-muted", String(next));
+    } catch {
+      // localStorage unavailable
+    }
     if (!next && ctxRef.current?.state === "suspended") {
       ctxRef.current.resume();
     }

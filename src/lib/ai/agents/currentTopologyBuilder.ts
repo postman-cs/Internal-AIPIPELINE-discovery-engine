@@ -8,7 +8,7 @@
 
 import { retrieveMultiQueryEvidence, formatEvidenceForPrompt } from "@/lib/ai/retrieval";
 import { runAgent } from "./runner";
-import { currentTopologyOutputSchema, type CurrentTopologyOutput } from "./topologyTypes";
+import { currentTopologyOutputSchema, type CurrentTopologyOutput, type AssumptionItem, type BlockerDetection } from "./topologyTypes";
 
 const SYSTEM_PROMPT = `You are a technical topology mapper for a Postman CSE team.
 
@@ -37,7 +37,7 @@ export async function runCurrentTopologyBuilder(
   projectId: string,
   projectName: string,
   discoveryContent: Record<string, unknown>
-): Promise<{ output: CurrentTopologyOutput; aiRunId: string }> {
+): Promise<{ output: CurrentTopologyOutput; aiRunId: string; assumptions: AssumptionItem[]; detectedBlockers: BlockerDetection[] }> {
   const evidence = await retrieveMultiQueryEvidence(projectId, [
     `${projectName} API architecture services microservices`,
     `${projectName} database infrastructure storage`,
@@ -77,5 +77,5 @@ Produce the topology graph JSON. Only reference evidence IDs from the list above
     outputSchema: currentTopologyOutputSchema,
   });
 
-  return { output: result.output, aiRunId: result.aiRunId };
+  return { output: result.output, aiRunId: result.aiRunId, assumptions: result.assumptions, detectedBlockers: result.detectedBlockers };
 }

@@ -50,6 +50,7 @@ export function Starfield() {
   const shootingRef = useRef<ShootingStar[]>([]);
   const nebulaeRef = useRef<Nebula[]>([]);
   const lastShootRef = useRef(0);
+  const nextShootDelayRef = useRef(3 + Math.random() * 5);
   const sizeRef = useRef({ w: 0, h: 0 });
 
   const initStars = useCallback((w: number, h: number) => {
@@ -121,6 +122,7 @@ export function Starfield() {
     const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) return;
 
+    let resizeTimer: ReturnType<typeof setTimeout>;
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio, 2);
       const w = window.innerWidth;
@@ -134,17 +136,38 @@ export function Starfield() {
       initStars(w, h);
       initNebulae(w, h);
     };
+    const debouncedResize = () => {
+      clearTimeout(resizeTimer);
+      // Update canvas dimensions immediately for smooth visuals
+      const dpr = Math.min(window.devicePixelRatio, 2);
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      ctx.scale(dpr, dpr);
+      sizeRef.current = { w, h };
+      // Debounce the expensive star/nebula regeneration
+      resizeTimer = setTimeout(() => {
+        initStars(w, h);
+        initNebulae(w, h);
+      }, 150);
+    };
 
     resize();
-    window.addEventListener("resize", resize);
+    window.addEventListener("resize", debouncedResize);
 
     let time = 0;
-    const draw = () => {
+    let lastFrameTime = 0;
+    const draw = (timestamp: number) => {
+      const dt = lastFrameTime ? Math.min((timestamp - lastFrameTime) / 1000, 0.05) : 0.016;
+      lastFrameTime = timestamp;
       const { w, h } = sizeRef.current;
       const dpr = Math.min(window.devicePixelRatio, 2);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      time += 0.016; // ~60fps
+      time += dt;
 
       // --- Nebulae ---
       for (const neb of nebulaeRef.current) {
@@ -166,9 +189,6 @@ export function Starfield() {
         const alpha = star.baseAlpha * (0.5 + 0.5 * twinkle);
         if (alpha < 0.03) continue; // skip invisible stars
 
-        ctx.beginPath();
-        ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
-
         if (star.radius > 1) {
           // Bright stars get a glow
           ctx.fillStyle = `hsla(${star.hue}, 30%, 90%, ${alpha * 0.3})`;
@@ -184,8 +204,9 @@ export function Starfield() {
       }
 
       // --- Shooting stars ---
-      if (time - lastShootRef.current > 3 + Math.random() * 5) {
+      if (time - lastShootRef.current > nextShootDelayRef.current) {
         lastShootRef.current = time;
+        nextShootDelayRef.current = 3 + Math.random() * 5; // set next threshold once
         if (Math.random() < 0.6) spawnShootingStar(w, h);
       }
 
@@ -232,7 +253,8 @@ export function Starfield() {
 
     return () => {
       cancelAnimationFrame(animRef.current);
-      window.removeEventListener("resize", resize);
+      clearTimeout(resizeTimer);
+      window.removeEventListener("resize", debouncedResize);
     };
   }, [initStars, initNebulae, spawnShootingStar]);
 

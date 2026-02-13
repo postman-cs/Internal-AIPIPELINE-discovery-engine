@@ -11,6 +11,8 @@ const NAV_ITEMS = [
   { href: "/dashboard/ai-runs", label: "AI Runs", icon: "activity" },
 ];
 
+const ADMIN_ITEM = { href: "/admin", label: "Admin", icon: "admin" };
+
 function NavIcon({ icon, className }: { icon: string; className?: string }) {
   const cn = className || "w-3.5 h-3.5";
   switch (icon) {
@@ -38,12 +40,18 @@ function NavIcon({ icon, className }: { icon: string; className?: string }) {
           <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
         </svg>
       );
+    case "admin":
+      return (
+        <svg className={cn} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75" />
+        </svg>
+      );
     default:
       return null;
   }
 }
 
-export function TopNav({ userName }: { userName?: string }) {
+export function TopNav({ userName, isAdmin }: { userName?: string; isAdmin?: boolean }) {
   const pathname = usePathname();
 
   return (
@@ -73,8 +81,8 @@ export function TopNav({ userName }: { userName?: string }) {
                 Pipeline
               </span>
             </Link>
-            <nav className="flex items-center gap-0.5">
-              {NAV_ITEMS.map((item) => {
+            <nav className="flex items-center gap-0.5" aria-label="Main navigation">
+              {[...NAV_ITEMS, ...(isAdmin ? [ADMIN_ITEM] : [])].map((item) => {
                 const isActive =
                   pathname === item.href ||
                   pathname.startsWith(item.href + "/");
@@ -82,24 +90,8 @@ export function TopNav({ userName }: { userName?: string }) {
                   <Link
                     key={item.href}
                     href={item.href}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200"
-                    style={{
-                      background: isActive ? "rgba(6, 214, 214, 0.08)" : "transparent",
-                      color: isActive ? "var(--accent-cyan)" : "var(--foreground-muted)",
-                      boxShadow: isActive ? "0 0 0 1px rgba(6, 214, 214, 0.12)" : "none",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!isActive) {
-                        e.currentTarget.style.background = "rgba(255,255,255,0.04)";
-                        e.currentTarget.style.color = "var(--foreground)";
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!isActive) {
-                        e.currentTarget.style.background = "transparent";
-                        e.currentTarget.style.color = "var(--foreground-muted)";
-                      }
-                    }}
+                    className={`topnav-link flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${isActive ? "topnav-active" : ""}`}
+                    aria-current={isActive ? "page" : undefined}
                   >
                     <NavIcon icon={item.icon} />
                     {item.label}
@@ -117,10 +109,8 @@ export function TopNav({ userName }: { userName?: string }) {
             <form action={logoutAction}>
               <button
                 type="submit"
-                className="text-sm transition-colors duration-200"
-                style={{ color: "var(--foreground-dim)" }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = "var(--foreground)")}
-                onMouseLeave={(e) => (e.currentTarget.style.color = "var(--foreground-dim)")}
+                className="topnav-link text-sm transition-colors duration-200"
+                aria-label="Log out"
               >
                 Logout
               </button>

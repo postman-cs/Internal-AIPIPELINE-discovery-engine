@@ -41,16 +41,18 @@ export function DragDropZone({
     setIsDragging(false);
     setError(null);
 
-    // Check for text drop
-    const text = e.dataTransfer.getData("text/plain");
-    if (text && onTextDrop) {
-      onTextDrop(text);
+    // Check for files first (takes priority over text data)
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      processFiles(files);
       return;
     }
 
-    // Handle files
-    const files = Array.from(e.dataTransfer.files);
-    processFiles(files);
+    // Fall back to text drop
+    const text = e.dataTransfer.getData("text/plain");
+    if (text && onTextDrop) {
+      onTextDrop(text);
+    }
   };
 
   /** Check if a file matches the accept filter (e.g. "image/*,.txt,.pdf") */

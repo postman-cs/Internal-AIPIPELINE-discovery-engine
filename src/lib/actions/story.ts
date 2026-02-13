@@ -21,33 +21,38 @@ export async function polishStoryOutline(
     select: { id: true },
   });
   if (!project) {
-    throw new Error("Project not found");
+    return { error: "Project not found or access denied" };
   }
 
-  // Gather evidence excerpts for all referenced evidence IDs
+  // Cap evidenceIds to prevent abuse
   const allEvidenceIds = Array.from(
     new Set(outline.beats.flatMap((b) => b.evidenceIds))
-  );
+  ).slice(0, 100);
 
-  const chunks = await prisma.documentChunk.findMany({
-    where: {
-      evidenceLabel: { in: allEvidenceIds },
-      document: { projectId },
-    },
-    select: {
-      evidenceLabel: true,
-      content: true,
-      document: { select: { sourceType: true } },
-    },
-    take: 30,
-  });
+  try {
+    const chunks = await prisma.documentChunk.findMany({
+      where: {
+        evidenceLabel: { in: allEvidenceIds },
+        document: { projectId },
+      },
+      select: {
+        evidenceLabel: true,
+        content: true,
+        document: { select: { sourceType: true } },
+      },
+      take: 30,
+    });
 
-  const excerpts = chunks.map((c) => ({
-    id: c.evidenceLabel,
-    excerpt: c.content.slice(0, 200),
-    source: c.document.sourceType,
-  }));
+    const excerpts = chunks.map((c) => ({
+      id: c.evidenceLabel,
+      excerpt: c.content.slice(0, 200),
+      source: c.document.sourceType,
+    }));
 
-  const result = await runStoryPolisher(projectId, outline, excerpts);
-  return result;
+    const result = await runStoryPolisher(projectId, outline, excerpts);
+    return result;
+  } catch (e) {
+    console.error("[story] polishStoryOutline failed:", e);
+    return { error: "Failed to polish story outline. Please try again." };
+  }
 }

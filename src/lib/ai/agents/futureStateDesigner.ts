@@ -8,7 +8,7 @@
 
 import { retrieveMultiQueryEvidence, formatEvidenceForPrompt } from "@/lib/ai/retrieval";
 import { runAgent } from "./runner";
-import { futureStateOutputSchema, type FutureStateOutput } from "./topologyTypes";
+import { futureStateOutputSchema, type FutureStateOutput, type AssumptionItem, type BlockerDetection } from "./topologyTypes";
 
 const SYSTEM_PROMPT = `You are an API architecture strategist for Postman's CSE team.
 
@@ -37,7 +37,7 @@ export async function runFutureStateDesigner(
   projectName: string,
   currentTopologyContent: Record<string, unknown>,
   discoveryContent: Record<string, unknown>
-): Promise<{ output: FutureStateOutput; aiRunId: string }> {
+): Promise<{ output: FutureStateOutput; aiRunId: string; assumptions: AssumptionItem[]; detectedBlockers: BlockerDetection[] }> {
   const evidence = await retrieveMultiQueryEvidence(projectId, [
     `${projectName} API strategy modernization goals`,
     `${projectName} pain points developer experience improvement`,
@@ -77,5 +77,5 @@ Produce the future state topology JSON with delta summary.`;
     outputSchema: futureStateOutputSchema,
   });
 
-  return { output: result.output, aiRunId: result.aiRunId };
+  return { output: result.output, aiRunId: result.aiRunId, assumptions: result.assumptions, detectedBlockers: result.detectedBlockers };
 }

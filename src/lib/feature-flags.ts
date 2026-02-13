@@ -10,16 +10,32 @@
  */
 
 export type FeatureFlag =
-  | "AI_PIPELINE"          // AI-powered discovery pipeline
-  | "WEBHOOK_INGEST"       // External webhook ingest endpoint
-  | "STORY_MODE"           // Topology story mode tab
-  | "COMMAND_PALETTE"      // Cmd+K command palette
-  | "PROJECT_NOTES"        // Quick notes per project
-  | "EXPORT_PROJECT"       // Export project data
-  | "EVIDENCE_SEARCH"      // Full-text evidence search
-  | "IMAGE_INGEST"         // Image upload in discovery
-  | "CASCADE_AUTO_POLL"    // Auto-poll cascade status
-  | "METRICS_ENDPOINT";    // Prometheus metrics
+  | "AI_PIPELINE"           // AI-powered discovery pipeline
+  | "WEBHOOK_INGEST"        // External webhook ingest endpoint
+  | "STORY_MODE"            // Topology story mode tab
+  | "COMMAND_PALETTE"       // Cmd+K command palette
+  | "PROJECT_NOTES"         // Quick notes per project
+  | "EXPORT_PROJECT"        // Export project data
+  | "EVIDENCE_SEARCH"       // Full-text evidence search
+  | "IMAGE_INGEST"          // Image upload in discovery
+  | "CASCADE_AUTO_POLL"     // Auto-poll cascade status
+  | "METRICS_ENDPOINT"      // Prometheus metrics
+  | "POSTMAN_API_SYNC"      // Postman API integration (collections, envs, monitors)
+  | "GIT_INTEGRATION"       // Push configs to git repos
+  | "NEWMAN_EXECUTION"      // Newman dry-run execution engine
+  | "PIPELINE_TEMPLATES"    // CI/CD pipeline template library
+  | "PIPELINE_TRACKING"     // Pipeline adoption tracker
+  | "INFRASTRUCTURE_PHASE"  // IaC / cloud provisioning phase
+  | "GOVERNANCE_ENGINE"     // API governance rules engine
+  | "MULTI_WORKSPACE"       // Multi-workspace / multi-team support
+  | "EXPORT_PACKAGE"        // Full engagement package export
+  | "NEWMAN_RESULTS"        // Newman test results ingestion webhook
+  | "CONTRACT_TESTING"      // OpenAPI contract testing
+  | "MONITOR_GATES"         // Postman Monitor as deployment gate
+  | "ASSUMPTION_VERIFICATION"  // Human assumption verification gates
+  | "BLOCKER_SYSTEM"           // Blocker Mapping → Missile → Nuke system
+  | "ADOPTION_ACCELERATOR"    // Wide Adoption Accelerator with drip/tide
+  | "MULTI_MODEL_ROUTING";   // Intelligent model routing (OpenAI + Anthropic)
 
 /** Default flag values — true = enabled by default */
 const DEFAULTS: Record<FeatureFlag, boolean> = {
@@ -33,6 +49,22 @@ const DEFAULTS: Record<FeatureFlag, boolean> = {
   IMAGE_INGEST: true,
   CASCADE_AUTO_POLL: true,
   METRICS_ENDPOINT: true,
+  POSTMAN_API_SYNC: true,
+  GIT_INTEGRATION: true,
+  NEWMAN_EXECUTION: true,
+  PIPELINE_TEMPLATES: true,
+  PIPELINE_TRACKING: true,
+  INFRASTRUCTURE_PHASE: true,
+  GOVERNANCE_ENGINE: true,
+  MULTI_WORKSPACE: true,
+  EXPORT_PACKAGE: true,
+  NEWMAN_RESULTS: true,
+  CONTRACT_TESTING: true,
+  MONITOR_GATES: true,
+  ASSUMPTION_VERIFICATION: true,
+  BLOCKER_SYSTEM: true,
+  ADOPTION_ACCELERATOR: true,
+  MULTI_MODEL_ROUTING: true,
 };
 
 /**

@@ -72,22 +72,31 @@ export const PHASE_GRAPH: readonly PhaseNode[] = [
     order: 3,
   },
   {
+    phase: "INFRASTRUCTURE",
+    label: "Infrastructure",
+    shortLabel: "INF",
+    description: "Cloud provisioning and IaC generation for API infrastructure",
+    dependencies: ["SOLUTION_DESIGN", "CURRENT_TOPOLOGY"],
+    implemented: true,
+    order: 4,
+  },
+  {
     phase: "TEST_DESIGN",
     label: "Test Design",
     shortLabel: "TST",
     description: "Test strategy and acceptance criteria for the solution",
     dependencies: ["SOLUTION_DESIGN"],
     implemented: true,
-    order: 4,
+    order: 5,
   },
   {
     phase: "CRAFT_SOLUTION",
     label: "Craft Solution",
     shortLabel: "CRA",
     description: "Build the actual Postman collections, environments, and workflows",
-    dependencies: ["SOLUTION_DESIGN", "TEST_DESIGN"],
+    dependencies: ["SOLUTION_DESIGN", "TEST_DESIGN", "INFRASTRUCTURE"],
     implemented: true,
-    order: 5,
+    order: 6,
   },
   {
     phase: "TEST_SOLUTION",
@@ -96,7 +105,7 @@ export const PHASE_GRAPH: readonly PhaseNode[] = [
     description: "Execute tests against the crafted solution",
     dependencies: ["CRAFT_SOLUTION", "TEST_DESIGN"],
     implemented: true,
-    order: 6,
+    order: 7,
   },
   {
     phase: "DEPLOYMENT_PLAN",
@@ -105,7 +114,7 @@ export const PHASE_GRAPH: readonly PhaseNode[] = [
     description: "Rollout plan including change management and training",
     dependencies: ["TEST_SOLUTION"],
     implemented: true,
-    order: 7,
+    order: 8,
   },
   {
     phase: "MONITORING",
@@ -114,7 +123,7 @@ export const PHASE_GRAPH: readonly PhaseNode[] = [
     description: "Ongoing health checks, sentiment tracking, and renewal signals",
     dependencies: ["DEPLOYMENT_PLAN"],
     implemented: true,
-    order: 8,
+    order: 9,
   },
   {
     phase: "ITERATION",
@@ -123,7 +132,7 @@ export const PHASE_GRAPH: readonly PhaseNode[] = [
     description: "Continuous improvement based on monitoring insights",
     dependencies: ["MONITORING", "DISCOVERY"],
     implemented: true,
-    order: 9,
+    order: 10,
   },
 ] as const;
 

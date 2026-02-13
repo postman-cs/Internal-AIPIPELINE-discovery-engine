@@ -7,7 +7,7 @@
  */
 
 import { runAgent } from "./runner";
-import { testSolutionOutputSchema, type TestSolutionOutput } from "./topologyTypes";
+import { testSolutionOutputSchema, type TestSolutionOutput, type AssumptionItem, type BlockerDetection } from "./topologyTypes";
 
 const SYSTEM_PROMPT = `You are a test execution planner for Postman's CSE team.
 
@@ -33,7 +33,7 @@ export async function runTestSolution(
   projectName: string,
   craftContent: Record<string, unknown>,
   testDesignContent: Record<string, unknown>
-): Promise<{ output: TestSolutionOutput; aiRunId: string }> {
+): Promise<{ output: TestSolutionOutput; aiRunId: string; assumptions: AssumptionItem[]; detectedBlockers: BlockerDetection[] }> {
   const userPrompt = `Plan test execution for "${projectName}".
 
 === IMPLEMENTATION PLAN ===
@@ -56,5 +56,5 @@ Produce the test execution JSON.`;
     outputSchema: testSolutionOutputSchema,
   });
 
-  return { output: result.output, aiRunId: result.aiRunId };
+  return { output: result.output, aiRunId: result.aiRunId, assumptions: result.assumptions, detectedBlockers: result.detectedBlockers };
 }

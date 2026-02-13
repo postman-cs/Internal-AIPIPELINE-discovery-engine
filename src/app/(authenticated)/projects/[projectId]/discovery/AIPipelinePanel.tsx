@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useRef } from "react";
+import { useState, useTransition, useRef, useEffect } from "react";
 import {
   ingestDiscoveryDocument,
   runAIDiscoveryPipeline,
@@ -49,6 +49,14 @@ export function AIPipelinePanel({ projectId, evidenceStats, hasArtifact, latestV
   const [pipelineMsg, setPipelineMsg] = useState<{ type: "success" | "error" | "running"; text: string } | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
 
+  // Clean up Object URL on unmount to prevent memory leak
+  useEffect(() => {
+    return () => {
+      if (imagePreview) URL.revokeObjectURL(imagePreview);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on unmount
+  }, []);
+
   // --- Ingest text ---
   const handleIngest = () => {
     if (!ingestContent.trim()) {
@@ -81,33 +89,37 @@ export function AIPipelinePanel({ projectId, evidenceStats, hasArtifact, latestV
     });
   };
 
-  // --- Image upload ---
-  const handleImageUpload = async (files: File[]) => {
-    for (const file of files) {
-      if (file.type.startsWith("image/")) {
-        // Convert to text description + base64 reference
-        const text = await readFileAsText(file);
-        if (text) {
-          setIngestSource("IMAGE");
-          setIngestTitle(file.name);
-          setIngestContent(text);
-          // Revoke previous preview URL to prevent memory leak
-          if (imagePreview) URL.revokeObjectURL(imagePreview);
-          setImagePreview(URL.createObjectURL(file));
-          toast.info("Image loaded", `${file.name} ready to ingest`);
-        }
-      } else {
-        // Text file
-        const reader = new FileReader();
-        reader.onload = () => {
-          const content = reader.result as string;
-          setIngestSource("MANUAL");
-          setIngestTitle(file.name);
-          setIngestContent(content);
-          toast.info("File loaded", `${file.name} ready to ingest`);
-        };
-        reader.readAsText(file);
+  // --- File upload (processes one file at a time) ---
+  const handleFileUpload = async (files: File[]) => {
+    if (files.length === 0) return;
+    if (files.length > 1) {
+      toast.warning("One file at a time", "Please drop or select a single file. Only the first file will be loaded.");
+    }
+    const file = files[0];
+
+    if (file.type.startsWith("image/")) {
+      // Convert to text description + base64 reference
+      const text = await readFileAsText(file);
+      if (text) {
+        setIngestSource("IMAGE");
+        setIngestTitle(file.name);
+        setIngestContent(text);
+        // Revoke previous preview URL to prevent memory leak
+        if (imagePreview) URL.revokeObjectURL(imagePreview);
+        setImagePreview(URL.createObjectURL(file));
+        toast.info("Image loaded", `${file.name} ready to ingest`);
       }
+    } else {
+      // Text file
+      const reader = new FileReader();
+      reader.onload = () => {
+        const content = reader.result as string;
+        setIngestSource("MANUAL");
+        setIngestTitle(file.name);
+        setIngestContent(content);
+        toast.info("File loaded", `${file.name} ready to ingest`);
+      };
+      reader.readAsText(file);
     }
   };
 
@@ -221,7 +233,7 @@ export function AIPipelinePanel({ projectId, evidenceStats, hasArtifact, latestV
 
             {/* Drag & Drop + File Upload */}
             <DragDropZone
-              onFileDrop={handleImageUpload}
+              onFileDrop={handleFileUpload}
               onTextDrop={handleTextDrop}
               accept="image/*,.txt,.md,.csv,.json,.pdf"
               maxSizeMB={10}
@@ -244,7 +256,7 @@ export function AIPipelinePanel({ projectId, evidenceStats, hasArtifact, latestV
               className="hidden"
               onChange={(e) => {
                 const files = Array.from(e.target.files || []);
-                if (files.length > 0) handleImageUpload(files);
+                if (files.length > 0) handleFileUpload(files);
                 e.target.value = "";
               }}
             />

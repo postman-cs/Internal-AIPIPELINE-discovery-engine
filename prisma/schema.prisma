@@ -18,6 +18,7 @@ enum Phase {
   CURRENT_TOPOLOGY
   DESIRED_FUTURE_STATE
   SOLUTION_DESIGN
+  INFRASTRUCTURE
   TEST_DESIGN
   CRAFT_SOLUTION
   TEST_SOLUTION
@@ -76,7 +77,9 @@ model User {
   email               String               @unique
   name                String
   passwordHash        String
+  isAdmin             Boolean              @default(false)
   createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @default(now()) @updatedAt
   projects            Project[]
   ingestRuns          IngestRun[]
   ingestSourceConfigs IngestSourceConfig[]
@@ -87,27 +90,62 @@ model User {
 // ---------------------------------------------------------------------------
 
 model Project {
-  id                 String              @id @default(cuid())
-  name               String
-  primaryDomain      String?
-  apiDomain          String?
-  publicWorkspaceUrl String?
-  ownerUserId        String
-  owner              User                @relation(fields: [ownerUserId], references: [id])
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
-  discoveryArtifacts DiscoveryArtifact[]
-  sourceDocuments    SourceDocument[]
-  aiRuns             AIRun[]
-  evidenceSnapshots  EvidenceSnapshot[]
-  phaseArtifacts     PhaseArtifact[]
-  recomputeJobs      RecomputeJob[]
-  proposals          Proposal[]
-  topologyNodes      TopologyNode[]
-  topologyEdges      TopologyEdge[]
-  topologySnapshots  TopologySnapshot[]
-  notes              ProjectNote[]
-  isPinned           Boolean             @default(false)
+  id                   String              @id @default(cuid())
+  name                 String
+  primaryDomain        String?
+  apiDomain            String?
+  publicWorkspaceUrl   String?
+  ownerUserId          String
+  owner                User                @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  discoveryArtifacts   DiscoveryArtifact[]
+  sourceDocuments      SourceDocument[]
+  aiRuns               AIRun[]
+  evidenceSnapshots    EvidenceSnapshot[]
+  phaseArtifacts       PhaseArtifact[]
+  recomputeJobs        RecomputeJob[]
+  proposals            Proposal[]
+  topologyNodes        TopologyNode[]
+  topologyEdges        TopologyEdge[]
+  topologySnapshots    TopologySnapshot[]
+  notes                ProjectNote[]
+  isPinned             Boolean             @default(false)
+
+  // Feature #1, #2, #3: Postman API integration
+  postmanApiKey        String?             // Encrypted Postman API key
+  postmanWorkspaceId   String?             // Postman workspace ID for syncing
+
+  // Feature #5: Git integration
+  gitProvider          String?             // github, gitlab, bitbucket
+  gitRepoOwner         String?
+  gitRepoName          String?
+  gitToken             String?             // Encrypted PAT/OAuth token
+  gitBaseBranch        String?             @default("main")
+
+  // Feature #13: Governance
+  governanceRulesJson  Json?               // Governance rules config
+
+  // Feature #14: Multi-workspace / multi-team
+  workspaces           ProjectWorkspace[]
+
+  // Feature #8: Pipeline tracking
+  pipelineDeployments  PipelineDeployment[]
+
+  // Feature #17: Newman results
+  newmanTestResults    NewmanTestResult[]
+
+  // Human Assumption Verification
+  assumptions          Assumption[]
+
+  // Blocker System
+  blockers             Blocker[]
+
+  // Wide Adoption Accelerator
+  adoptionWaves        AdoptionWave[]
+  adoptionTeams        AdoptionTeam[]
+  dripCampaigns        DripCampaign[]
+  adoptionMilestones   AdoptionMilestone[]
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +155,7 @@ model Project {
 model IngestSourceConfig {
   id                String   @id @default(cuid())
   userId            String
-  user              User     @relation(fields: [userId], references: [id])
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   source            String
   enabled           Boolean  @default(true)
   configJson        String?
@@ -128,12 +166,13 @@ model IngestSourceConfig {
   updatedAt         DateTime @updatedAt
 
   @@unique([userId, source])
+  @@index([userId])
 }
 
 model IngestRun {
   id            String      @id @default(cuid())
   userId        String
-  user          User        @relation(fields: [userId], references: [id])
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   startedAt     DateTime    @default(now())
   finishedAt    DateTime?
   status        String      @default("QUEUED")
@@ -142,6 +181,9 @@ model IngestRun {
   summary       String?
   countsJson    String?
   items         IngestItem[]
+
+  @@index([userId])
+  @@index([startedAt])
 }
 
 model IngestItem {
@@ -156,6 +198,10 @@ model IngestItem {
   rawText      String?
   metadataJson String?
   consumedAt   DateTime?
+
+  @@index([ingestRunId])
+  @@index([source])
+  @@index([consumedAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +242,7 @@ model DocumentChunk {
 model AIRun {
   id         String   @id @default(cuid())
   projectId  String?
-  project    Project? @relation(fields: [projectId], references: [id])
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
   agentType  String   // ReconSynthesizer, SignalClassifier, MaturityScorer, HypothesisGenerator, BriefGenerator, etc.
   model      String
   promptHash String
@@ -409,4 +455,484 @@ model TopologySnapshot {
   createdAt    DateTime @default(now())
 
   @@index([projectId])
+}
+
+// ---------------------------------------------------------------------------
+// Feature #14: Multi-Workspace / Multi-Team
+// ---------------------------------------------------------------------------
+
+model ProjectWorkspace {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workspaceName   String
+  workspaceId     String?  // Postman workspace ID
+  apiKey          String?  // Encrypted API key for this workspace
+  team            String?  // Team name/label
+  description     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([projectId, workspaceName])
+  @@index([projectId])
+}
+
+// ---------------------------------------------------------------------------
+// Feature #8: Pipeline Adoption Tracker
+// ---------------------------------------------------------------------------
+
+model PipelineDeployment {
+  id            String    @id @default(cuid())
+  projectId     String
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  platform      String    // github_actions, gitlab_ci, jenkins, etc.
+  platformLabel String
+  repoUrl       String?
+  pipelineRef   String?   // PR number, MR IID, etc.
+  filename      String?
+  branchName    String?
+  prUrl         String?
+  lastStatus    String    @default("pending") // pending, active, passing, failing, unknown
+  lastRunAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([projectId])
+  @@index([platform])
+}
+
+// ---------------------------------------------------------------------------
+// Feature #17: Newman Test Results Ingestion
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Human Assumption Verification
+// ---------------------------------------------------------------------------
+
+enum AssumptionStatus {
+  PENDING          // Awaiting human review
+  VERIFIED         // Human confirmed as correct
+  CORRECTED        // Human provided a correction
+  REJECTED         // Human said this is wrong
+  AUTO_VERIFIED    // Auto-verified from prior phase evidence
+}
+
+model Assumption {
+  id              String           @id @default(cuid())
+  projectId       String
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phase           Phase            // Which phase surfaced this assumption
+  category        String           // cloud_provider, ci_cd_platform, auth_pattern, api_architecture, etc.
+  claim           String           // The assumption text (what the AI believes)
+  reasoning       String?          // Why the AI believes this
+  confidence      String           @default("Medium") // High, Medium, Low
+  evidenceIds     Json?            // Evidence IDs supporting this assumption
+  impact          String?          // What goes wrong if this assumption is incorrect
+  status          AssumptionStatus @default(PENDING)
+  humanResponse   String?          // Human's correction text (if CORRECTED)
+  verifiedBy      String?          // userId of the verifier
+  verifiedAt      DateTime?
+  blocksPhases    Json?            // Array of Phase names that depend on this assumption
+  recomputeJobId  String?          // Links to the recompute job that generated this
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([projectId, phase])
+  @@index([projectId, status])
+  @@index([recomputeJobId])
+}
+
+model NewmanTestResult {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  collectionName  String?
+  environmentName String?
+  totalRequests   Int      @default(0)
+  totalAssertions Int      @default(0)
+  passedAssertions Int     @default(0)
+  failedAssertions Int     @default(0)
+  totalDuration   Int      @default(0) // ms
+  status          String   @default("pass") // pass, fail, error
+  resultJson      Json?    // Full structured results
+  source          String   @default("webhook") // webhook, dry-run, ci
+  createdAt       DateTime @default(now())
+
+  @@index([projectId])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Blocker System: Map → Missile → Nuke
+// ---------------------------------------------------------------------------
+
+enum BlockerSeverity {
+  LOW           // Inconvenient but workable
+  MEDIUM        // Slows progress, needs attention
+  HIGH          // Blocks a critical path
+  CRITICAL      // Full stop — nothing moves until this is resolved
+}
+
+enum BlockerStatus {
+  IDENTIFIED    // Just discovered
+  MAPPED        // Fully analyzed — stakeholders, impact, root cause known
+  MISSILE_DESIGNED  // Targeted intervention plan is ready
+  MISSILE_FIRED     // Intervention is in progress
+  NUKE_ARMED        // Nuclear option has been designed
+  NUKE_LAUNCHED     // Nuclear option is in progress
+  NEUTRALIZED       // Blocker has been eliminated
+  ACCEPTED          // Blocker is permanent — workaround adopted
+  DORMANT           // Blocker exists but isn't currently active
+}
+
+enum BlockerDomain {
+  TECHNICAL         // Can't install Newman, CI/CD doesn't support X, etc.
+  ORGANIZATIONAL    // Security team won't approve, no budget, wrong team owns it
+  POLITICAL         // VP prefers competitor, not-invented-here, turf war
+  PROCESS           // Change board meets quarterly, compliance needs 6-month eval
+  KNOWLEDGE         // Team doesn't understand value, no one knows how
+  SECURITY          // Compliance blocks, data residency, audit requirements
+  LICENSING         // License limitations, procurement delays
+  CULTURAL          // Resistance to change, "we've always done it this way"
+}
+
+model Blocker {
+  id                String          @id @default(cuid())
+  projectId         String
+  project           Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  // --- Mapping ---
+  title             String          // Short name: "Security team won't approve Newman in CI"
+  description       String          // Full description of the blocker
+  domain            BlockerDomain   // What kind of blocker this is
+  severity          BlockerSeverity @default(MEDIUM)
+  status            BlockerStatus   @default(IDENTIFIED)
+  
+  // What it blocks
+  blockedPhases     Json?           // Array of Phase names this blocker affects
+  blockedCapabilities Json?         // What features/capabilities are blocked
+  
+  // Root cause analysis
+  rootCause         String?         // Why does this blocker exist?
+  rootCauseCategory String?         // technical_limitation, org_policy, person, budget, process, unknown
+  
+  // Stakeholder mapping
+  blockerOwner      String?         // Who controls this blocker? (person/team/role)
+  decisionMaker     String?         // Who can unblock this? (different from owner)
+  allies            Json?           // People/teams who want this blocker removed
+  resistors         Json?           // People/teams who benefit from this blocker existing
+  
+  // Impact assessment
+  impactScore       Int             @default(0) // 1-100 composite score
+  revenueImpact     String?         // Impact on deal/revenue if not resolved
+  timelineImpact    String?         // How much this delays the engagement
+  cascadeImpact     String?         // What downstream work is blocked
+  
+  // Context from AI
+  surfacedByPhase   String?         // Which pipeline phase detected this
+  surfacedByAgent   String?         // Which AI agent flagged it
+  evidenceIds       Json?           // Evidence supporting this blocker
+  assumptionIds     Json?           // Related assumption IDs
+  
+  // Human notes
+  notes             String?         // Free-form notes from the SE
+  
+  // Resolution
+  resolvedAt        DateTime?
+  resolvedBy        String?
+  resolutionNotes   String?
+  
+  // Relations
+  missiles          BlockerMissile[]
+  nukes             BlockerNuke[]
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([projectId])
+  @@index([projectId, status])
+  @@index([severity])
+}
+
+/// A targeted, surgical intervention designed to neutralize a specific blocker.
+/// Like a precision missile: focused, calculated, with a specific target and payload.
+model BlockerMissile {
+  id                String          @id @default(cuid())
+  blockerId         String
+  blocker           Blocker         @relation(fields: [blockerId], references: [id], onDelete: Cascade)
+  
+  // --- Design ---
+  name              String          // "Executive ROI Presentation", "Newman Sandbox Demo"
+  strategy          String          // The approach: what this missile does
+  targetAudience    String?         // Who this missile is aimed at
+  
+  // Payload: the actual content/actions
+  talkingPoints     Json?           // Key arguments / value propositions
+  evidence          Json?           // Data points, case studies, proof points
+  actionSteps       Json?           // Ordered list of steps to execute
+  deliverables      Json?           // What to produce: deck, demo, POC, doc, etc.
+  
+  // Timing & effort
+  estimatedEffort   String?         // "2 hours", "1 day", "1 week"
+  deadline          DateTime?       // When this needs to be fired by
+  
+  // Success criteria
+  successCriteria   String?         // How do we know it worked?
+  fallbackPlan      String?         // If this missile misses, what next?
+  
+  // Execution
+  status            String          @default("designed") // designed, in_progress, fired, hit, missed
+  firedAt           DateTime?
+  resultNotes       String?         // What happened when we fired it
+  
+  // AI-assisted design
+  aiGenerated       Boolean         @default(false)
+  aiRunId           String?         // If AI helped design this
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([blockerId])
+}
+
+/// The nuclear option. When surgical strikes fail, this is the comprehensive
+/// strategy to obliterate the blocker through overwhelming force — executive
+/// escalation, org restructuring, complete re-architecture, or finding an
+/// entirely different path that makes the blocker irrelevant.
+model BlockerNuke {
+  id                String          @id @default(cuid())
+  blockerId         String
+  blocker           Blocker         @relation(fields: [blockerId], references: [id], onDelete: Cascade)
+  
+  // --- Strategy ---
+  name              String          // "Executive Air Cover", "Complete Re-Architecture"
+  rationale         String          // Why the nuclear option is necessary
+  strategy          String          // The comprehensive obliteration plan
+  
+  // Escalation path
+  escalationChain   Json?           // Ordered list of people/roles to escalate through
+  executiveSponsor  String?         // Who at the highest level backs this
+  
+  // Collateral assessment
+  collateralDamage  Json?           // What else gets affected (relationships, timeline, etc.)
+  riskAssessment    String?         // What's the risk of launching this nuke
+  pointOfNoReturn   String?         // At what point can we not undo this
+  
+  // Comprehensive action plan
+  phases            Json?           // Multi-phase execution plan
+  resources         Json?           // People, budget, tools needed
+  timeline          String?         // Expected duration
+  
+  // Alternative path (bypass blocker entirely)
+  bypassStrategy    String?         // How to make the blocker irrelevant
+  bypassTradeoffs   String?         // What we lose by going around it
+  
+  // Success / failure
+  successCriteria   String?
+  failureContingency String?        // If even the nuke doesn't work, what then?
+  
+  // Execution
+  status            String          @default("designed") // designed, armed, launched, detonated, failed
+  armedAt           DateTime?
+  launchedAt        DateTime?
+  resultNotes       String?
+  
+  // AI-assisted design
+  aiGenerated       Boolean         @default(false)
+  aiRunId           String?
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([blockerId])
+}
+
+// ---------------------------------------------------------------------------
+// Wide Adoption Accelerator
+// ---------------------------------------------------------------------------
+
+enum WaveStatus {
+  PLANNED
+  READY
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  SKIPPED
+}
+
+/// An adoption wave — a cohort of teams that adopt Postman together.
+/// Waves build like a tide: each wave is bigger and faster than the last.
+model AdoptionWave {
+  id              String      @id @default(cuid())
+  projectId       String
+  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  waveNumber      Int         // 1, 2, 3... — sequential wave order
+  name            String      // "Pilot Wave", "API Platform Team", "All Backend Teams"
+  description     String?
+  status          WaveStatus  @default(PLANNED)
+
+  // Timing
+  plannedStartDate DateTime?
+  plannedEndDate   DateTime?
+  actualStartDate  DateTime?
+  actualEndDate    DateTime?
+
+  // Go/No-Go gate
+  goNoGoGateJson  Json?       // Criteria that must be met before wave launches
+  gateCleared     Boolean     @default(false)
+  gateClearedAt   DateTime?
+  gateClearedBy   String?     // userId
+
+  // Metrics targets
+  targetTeamCount   Int       @default(0)
+  targetUserCount   Int       @default(0)
+  targetCollections Int       @default(0)
+  targetCiPipelines Int       @default(0)
+
+  // Actual metrics
+  actualTeamCount   Int       @default(0)
+  actualUserCount   Int       @default(0)
+  actualCollections Int       @default(0)
+  actualCiPipelines Int       @default(0)
+
+  // Relations
+  teams           AdoptionTeam[]
+  dripCampaigns   DripCampaign[]
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@unique([projectId, waveNumber])
+  @@index([projectId])
+}
+
+/// A team within the enterprise being onboarded to Postman.
+model AdoptionTeam {
+  id              String      @id @default(cuid())
+  projectId       String
+  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  waveId          String?
+  wave            AdoptionWave? @relation(fields: [waveId], references: [id], onDelete: SetNull)
+
+  name            String      // "Payments API Team", "Infrastructure", "QA"
+  department      String?     // Engineering, QA, DevOps, Platform, etc.
+  teamSize        Int         @default(0)
+  teamLead        String?     // Contact name
+  teamLeadEmail   String?
+
+  // Readiness
+  readinessScore  Int         @default(0) // 0-100
+  readinessJson   Json?       // Detailed readiness assessment
+
+  // Adoption status
+  adoptionStage   String      @default("unaware") // unaware, aware, evaluating, piloting, adopted, champion
+  adoptionScore   Int         @default(0) // 0-100 composite
+
+  // Tech context
+  ciPlatform      String?     // github_actions, jenkins, etc.
+  primaryLanguage String?     // Java, Python, Node, etc.
+  existingTools   Json?       // Competing tools they currently use
+  integrationComplexity String? // low, medium, high
+
+  // Champion
+  championName    String?
+  championEmail   String?
+  championActive  Boolean     @default(false)
+
+  // Metrics
+  collectionsCreated   Int    @default(0)
+  testsWritten         Int    @default(0)
+  ciPipelinesActive    Int    @default(0)
+  activeUsers          Int    @default(0)
+  newmanRunsPerWeek    Int    @default(0)
+
+  // ROI
+  estimatedRoiJson     Json?  // Projected ROI for this team
+  actualRoiJson        Json?  // Measured ROI
+
+  // Resistance / friction
+  resistanceLevel      String @default("none") // none, low, medium, high
+  resistanceNotes      String?
+  frictionPoints       Json?  // Array of friction points
+
+  // Onboarding
+  onboardingPlaybookJson Json? // Generated onboarding playbook
+  integrationBlueprintJson Json? // Generated CI/CD integration blueprint
+
+  // Notes
+  notes           String?
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([projectId])
+  @@index([waveId])
+  @@index([adoptionStage])
+}
+
+/// A drip campaign — automated sequence of enablement content.
+model DripCampaign {
+  id              String      @id @default(cuid())
+  projectId       String
+  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  waveId          String?
+  wave            AdoptionWave? @relation(fields: [waveId], references: [id], onDelete: SetNull)
+
+  name            String      // "Backend Team Onboarding Drip"
+  description     String?
+  targetAudience  String?     // team type, role, stage
+  status          String      @default("draft") // draft, active, paused, completed
+
+  // Schedule
+  startDate       DateTime?
+  cadence         String      @default("weekly") // daily, twice_weekly, weekly, biweekly
+  totalSteps      Int         @default(0)
+  currentStep     Int         @default(0)
+
+  // Content
+  stepsJson       Json?       // Array of drip steps with content, timing, channels
+
+  // Nudge triggers
+  nudgeTriggersJson Json?     // Event-based triggers for contextual nudges
+
+  // Metrics
+  recipientCount  Int         @default(0)
+  openRate        Float       @default(0)
+  engagementRate  Float       @default(0)
+  conversionCount Int         @default(0)
+
+  // AI
+  aiGenerated     Boolean     @default(false)
+  aiRunId         String?
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([projectId])
+  @@index([waveId])
+}
+
+/// Adoption milestones — celebrations and momentum markers.
+model AdoptionMilestone {
+  id              String      @id @default(cuid())
+  projectId       String
+  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  type            String      // first_collection, first_ci_run, full_coverage, team_onboarded, wave_complete, org_wide
+  title           String
+  description     String?
+  teamName        String?     // Which team achieved this (if team-specific)
+
+  // Celebration
+  celebratedAt    DateTime    @default(now())
+  celebrationJson Json?       // Celebration content: message, metrics snapshot, shareable card
+
+  // Metrics at time of milestone
+  metricsSnapshot Json?
+
+  createdAt       DateTime    @default(now())
+
+  @@index([projectId])
+  @@index([type])
 }
