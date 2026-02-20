@@ -6,7 +6,7 @@ export default async function AdminDashboard() {
 
   const cards = [
     { label: "Users", value: stats.userCount, href: "/admin/users", color: "#8b5cf6" },
-    { label: "Projects", value: stats.projectCount, href: "/admin/projects", color: "#ff6c37" },
+    { label: "Projects", value: stats.projectCount, href: "/admin/projects", color: "#22c55e" },
     { label: "Teams", value: stats.teamCount, href: "/admin/teams", color: "#06d6d6" },
     { label: "Waves", value: stats.waveCount, href: "/admin/waves", color: "#3b82f6" },
     { label: "Drip Campaigns", value: stats.campaignCount, href: "/admin/campaigns", color: "#10b981" },

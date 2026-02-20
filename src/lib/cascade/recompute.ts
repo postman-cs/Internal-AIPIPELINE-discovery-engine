@@ -14,6 +14,7 @@ import { generatePatch, generateDiffSummary } from "./patch";
 import type { Prisma } from "@prisma/client";
 import { persistPhaseAssumptions, isPhaseGateClear } from "@/lib/assumptions/engine";
 import { persistDetectedBlockers } from "@/lib/blockers/engine";
+import { applyProposal } from "@/lib/actions/cascade";
 import type { AssumptionItem, BlockerDetection } from "@/lib/ai/agents/topologyTypes";
 
 // Agent imports
@@ -60,6 +61,8 @@ export async function executeRecomputeJob(
   options?: {
     /** If true, pause execution when a phase has unverified High-confidence assumptions */
     gatedMode?: boolean;
+    /** If true, auto-accept proposals so phases become CLEAN and downstream phases can proceed */
+    autoAccept?: boolean;
   }
 ): Promise<{
   completedTasks: number;
@@ -185,6 +188,16 @@ export async function executeRecomputeJob(
       allBlockerIds.push(...blockerIds);
       completedTasks++;
 
+      // Auto-accept: apply proposal immediately so the phase becomes CLEAN
+      // and downstream phases can see it as a satisfied dependency.
+      if (options?.autoAccept) {
+        try {
+          await applyProposal(proposalId, { skipMarkDirty: true });
+        } catch {
+          // Non-fatal: proposal stays PENDING if apply fails
+        }
+      }
+
       await prisma.recomputeTask.update({
         where: { id: task.id },
         data: { status: "COMPLETED", finishedAt: new Date() },
@@ -269,27 +282,31 @@ async function executePhaseAgentWithAssumptions(
   snapshotId: string,
   recomputeJobId: string
 ): Promise<{ proposalId: string; assumptionIds: string[]; blockerIds: string[] }> {
+  // Check if this phase already has assumptions from a prior run.
+  // If so, skip extraction to avoid re-creating the same noise.
+  const existingAssumptions = await prisma.assumption.count({
+    where: { projectId, phase },
+  });
+  const skipExtraction = existingAssumptions > 0;
+
   const { proposedJson, markdown, aiRunIds, assumptions, detectedBlockers } = await executePhaseAgent(
     projectId, projectName, phase
   );
 
-  // Persist assumptions for human verification
   let assumptionIds: string[] = [];
-  if (assumptions.length > 0) {
+  if (!skipExtraction && assumptions.length > 0) {
     assumptionIds = await persistPhaseAssumptions(
       projectId, phase, assumptions, recomputeJobId
     );
   }
 
-  // Persist detected blockers
   let blockerIds: string[] = [];
-  if (detectedBlockers.length > 0) {
+  if (!skipExtraction && detectedBlockers.length > 0) {
     blockerIds = await persistDetectedBlockers(
       projectId, detectedBlockers, phase, `${phase}-agent`
     );
   }
 
-  // Create proposal via shared helper
   const proposalId = await createProposal(
     taskId, projectId, phase, snapshotId, proposedJson, markdown, aiRunIds
   );

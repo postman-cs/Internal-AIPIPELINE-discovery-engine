@@ -84,6 +84,16 @@ export async function persistPhaseAssumptions(
     count: assumptions.length,
   });
 
+  // Clean up stale PENDING and AUTO_VERIFIED assumptions from prior runs
+  // for this phase. Human-reviewed ones (VERIFIED, CORRECTED, REJECTED) are preserved.
+  await prisma.assumption.deleteMany({
+    where: {
+      projectId,
+      phase,
+      status: { in: ["PENDING", "AUTO_VERIFIED"] },
+    },
+  });
+
   // Check for existing verified assumptions in the same category.
   // If a human already verified an assumption in a prior run,
   // auto-verify matching assumptions (prevents re-asking known facts).

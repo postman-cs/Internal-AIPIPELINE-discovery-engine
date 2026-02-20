@@ -176,7 +176,7 @@ export const briefGeneratorOutputSchema = z.object({
     hypothesis: z.string(),
     recommendedApproach: z.record(z.unknown()),
     stakeholderTargets: z.array(z.record(z.unknown())),
-    firstMeetingAgenda: z.array(z.record(z.unknown())),
+    firstMeetingAgenda: z.array(z.union([z.record(z.unknown()), z.string()])),
     evidenceAppendix: z.array(z.record(z.unknown())),
   }),
   allCitations: z.array(evidenceCitationSchema),

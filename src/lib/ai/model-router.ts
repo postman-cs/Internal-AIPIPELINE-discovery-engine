@@ -108,15 +108,15 @@ export const MODELS: Record<string, ModelSpec> = {
     costPer1kOutput: 0.015,
     strengths: ["analysis", "synthesis", "nuance", "instruction_following", "long_form"],
   },
-  "claude-3-5-haiku-20241022": {
+  "claude-haiku-4-5-20251001": {
     provider: "anthropic",
-    modelId: "claude-3-5-haiku-20241022",
-    displayName: "Claude 3.5 Haiku",
+    modelId: "claude-haiku-4-5-20251001",
+    displayName: "Claude Haiku 4.5",
     contextWindow: 200_000,
     maxOutputTokens: 8_192,
-    costPer1kInput: 0.0008,
-    costPer1kOutput: 0.004,
-    strengths: ["speed", "cost_efficiency", "classification", "extraction"],
+    costPer1kInput: 0.001,
+    costPer1kOutput: 0.005,
+    strengths: ["speed", "cost_efficiency", "classification", "extraction", "coding"],
   },
 };
 
@@ -171,8 +171,8 @@ const AGENT_TASK_MAP: Record<string, TaskCategory> = {
   StoryPolisher: "creative_writing",
 
   // Blockers — organizational reasoning
-  "blocker-missile-designer": "blocker_strategy",
-  "blocker-nuke-strategist": "blocker_strategy",
+  "missile-designer": "blocker_strategy",
+  "nuke-strategist": "blocker_strategy",
 
   // Adoption — planning and enablement
   "onboarding-playbook-generator": "adoption_planning",
@@ -199,7 +199,7 @@ const TASK_MODEL_PREFERENCE: Record<TaskCategory, string[]> = {
   code_generation: ["gpt-4.1", "claude-sonnet-4-20250514"],
 
   // Fast classification — use smaller models
-  classification: ["gpt-4.1-mini", "claude-3-5-haiku-20241022", "gpt-4.1"],
+  classification: ["gpt-4.1-mini", "claude-haiku-4-5-20251001", "gpt-4.1"],
 
   // Claude excels at prose quality
   creative_writing: ["claude-sonnet-4-20250514", "gpt-4.1"],
@@ -364,18 +364,34 @@ export async function completeWithFallback(
 // Provider-specific implementations
 // ═══════════════════════════════════════════════════════════════════════════
 
+const LLM_TIMEOUT_MS = 120_000; // 2 minutes
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 async function completeOpenAI(req: CompletionRequest): Promise<CompletionResponse> {
   const client = getOpenAIClient();
 
-  const response = await client.chat.completions.create({
-    model: req.model.modelId,
-    messages: [
-      { role: "system", content: req.systemPrompt },
-      { role: "user", content: req.userPrompt },
-    ],
-    response_format: req.jsonMode ? { type: "json_object" } : undefined,
-    temperature: req.temperature ?? 0.1,
-  });
+  const response = await withTimeout(
+    client.chat.completions.create({
+      model: req.model.modelId,
+      messages: [
+        { role: "system", content: req.systemPrompt },
+        { role: "user", content: req.userPrompt },
+      ],
+      response_format: req.jsonMode ? { type: "json_object" } : undefined,
+      temperature: req.temperature ?? 0.1,
+    }),
+    LLM_TIMEOUT_MS,
+    `OpenAI/${req.model.modelId}`,
+  );
 
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error("OpenAI returned empty response");
@@ -402,15 +418,19 @@ async function completeAnthropic(req: CompletionRequest): Promise<CompletionResp
     systemPrompt += "\n\nIMPORTANT: You MUST respond with ONLY valid JSON. No markdown, no code fences, no explanation text outside the JSON. Start your response with { and end with }.";
   }
 
-  const response = await client.messages.create({
-    model: req.model.modelId,
-    max_tokens: req.model.maxOutputTokens,
-    system: systemPrompt,
-    messages: [
-      { role: "user", content: req.userPrompt },
-    ],
-    temperature: req.temperature ?? 0.1,
-  });
+  const response = await withTimeout(
+    client.messages.create({
+      model: req.model.modelId,
+      max_tokens: req.model.maxOutputTokens,
+      system: systemPrompt,
+      messages: [
+        { role: "user", content: req.userPrompt },
+      ],
+      temperature: req.temperature ?? 0.1,
+    }),
+    LLM_TIMEOUT_MS,
+    `Anthropic/${req.model.modelId}`,
+  );
 
   // Anthropic returns content blocks
   const textBlock = response.content.find((b) => b.type === "text");

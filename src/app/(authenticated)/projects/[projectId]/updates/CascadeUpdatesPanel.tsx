@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   triggerCascadeUpdate,
   acceptProposal,
@@ -9,6 +10,19 @@ import {
 } from "@/lib/actions/cascade";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+const PHASE_ROUTES: Record<string, string> = {
+  DISCOVERY: "/discovery",
+  CURRENT_TOPOLOGY: "/topology",
+  DESIRED_FUTURE_STATE: "/topology",
+  SOLUTION_DESIGN: "",
+  INFRASTRUCTURE: "/cicd",
+  TEST_DESIGN: "",
+  CRAFT_SOLUTION: "",
+  TEST_SOLUTION: "",
+};
+
+const EXECUTION_PHASES = new Set(["DEPLOYMENT_PLAN", "MONITORING", "ITERATION"]);
 
 interface PhaseState {
   phase: string;
@@ -89,8 +103,8 @@ export function CascadeUpdatesPanel({
   const [expandedProposal, setExpandedProposal] = useState<string | null>(null);
 
   const handleTriggerUpdate = () => {
+    setMessage({ type: "info", text: "Running cascade update... This may take 30-60 seconds." });
     startTransition(async () => {
-      setMessage({ type: "info", text: "Running cascade update... This may take 30-60 seconds." });
       const result = await triggerCascadeUpdate(projectId);
       if (result.error) {
         setMessage({ type: "error", text: result.error });
@@ -161,7 +175,9 @@ export function CascadeUpdatesPanel({
       <div className="card">
         <h2 className="text-sm font-semibold mb-3" style={{ color: "var(--foreground)" }}>Phase Graph</h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
-          {cascadeState.phaseGraph.map((node) => <PhaseCard key={node.phase} node={node} />)}
+          {cascadeState.phaseGraph
+            .filter((node) => !EXECUTION_PHASES.has(node.phase))
+            .map((node) => <PhaseCard key={node.phase} node={node} projectId={projectId} />)}
         </div>
       </div>
 
@@ -251,10 +267,14 @@ function SnapshotCard({ snapshot }: { snapshot: SnapshotInfo }) {
   );
 }
 
-function PhaseCard({ node }: { node: PhaseState }) {
+function PhaseCard({ node, projectId }: { node: PhaseState; projectId: string }) {
+  const route = PHASE_ROUTES[node.phase] ?? "";
+  const href = `/projects/${projectId}${route}`;
+
   return (
-    <div
-      className="rounded-lg p-3 text-center transition-all duration-200"
+    <Link
+      href={href}
+      className="rounded-lg p-3 text-center transition-all duration-200 hover:ring-1 hover:ring-[var(--accent-cyan)] cursor-pointer block"
       style={{
         border: node.implemented ? "1px solid var(--border-bright)" : "1px dashed var(--border)",
         background: node.implemented ? "var(--surface)" : "transparent",
@@ -266,7 +286,7 @@ function PhaseCard({ node }: { node: PhaseState }) {
       <StatusBadge status={node.status} />
       {node.hasArtifact && <div className="text-[10px] mt-1" style={{ color: "var(--foreground-dim)" }}>v{node.latestVersion}</div>}
       {!node.implemented && <div className="text-[10px] mt-1 italic" style={{ color: "var(--foreground-dim)" }}>not built</div>}
-    </div>
+    </Link>
   );
 }
 

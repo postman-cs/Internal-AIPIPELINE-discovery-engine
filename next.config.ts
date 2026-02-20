@@ -7,6 +7,14 @@ const nextConfig: NextConfig = {
   // Standalone output for Docker deployments
   output: "standalone",
 
+  // Allow long-running server actions (cascade runs 11 AI agents sequentially)
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "4mb",
+    },
+  },
+  serverExternalPackages: ["@prisma/client"],
+
   // Security headers are set in middleware.ts (single source of truth)
   // Keeping only DNS prefetch here as it's non-security and a perf hint
   headers: async () => [

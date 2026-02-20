@@ -109,7 +109,7 @@ export function ProjectActions({ projectId, isPinned }: { projectId: string; isP
                 onMouseEnter={(e) => { e.currentTarget.style.background = "var(--surface-hover)"; e.currentTarget.style.color = "var(--foreground)"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--foreground-muted)"; }}
               >
-                <span className="block font-medium" style={{ color: "var(--accent-orange)" }}>Engagement Package</span>
+                <span className="block font-medium" style={{ color: "var(--accent-green)" }}>Engagement Package</span>
                 <span className="text-[10px]" style={{ color: "var(--foreground-dim)" }}>Collections, CI/CD configs, IaC, docs</span>
               </button>
             </div>

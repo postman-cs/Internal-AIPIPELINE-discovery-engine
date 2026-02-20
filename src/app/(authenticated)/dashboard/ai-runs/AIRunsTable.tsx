@@ -178,7 +178,7 @@ function TableRow({ run, isExpanded, onToggle }: { run: AIRunRow; isExpanded: bo
                   <div className="flex gap-6 text-xs">
                     <div><span style={{ color: "var(--foreground-dim)" }}>Prompt:</span>{" "}<span className="font-mono font-medium" style={{ color: "var(--foreground)" }}>{tokens.prompt?.toLocaleString() ?? "—"}</span></div>
                     <div><span style={{ color: "var(--foreground-dim)" }}>Completion:</span>{" "}<span className="font-mono font-medium" style={{ color: "var(--foreground)" }}>{tokens.completion?.toLocaleString() ?? "—"}</span></div>
-                    <div><span style={{ color: "var(--foreground-dim)" }}>Total:</span>{" "}<span className="font-mono font-medium" style={{ color: "var(--accent-orange)" }}>{tokens.total?.toLocaleString() ?? "—"}</span></div>
+                    <div><span style={{ color: "var(--foreground-dim)" }}>Total:</span>{" "}<span className="font-mono font-medium" style={{ color: "var(--accent-green)" }}>{tokens.total?.toLocaleString() ?? "—"}</span></div>
                     <div><span style={{ color: "var(--foreground-dim)" }}>Model:</span>{" "}<span className="font-mono" style={{ color: "var(--foreground)" }}>{run.model}</span></div>
                   </div>
                 </div>

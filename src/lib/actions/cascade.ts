@@ -70,12 +70,17 @@ export async function triggerCascadeUpdate(
     );
 
     // 3. Execute the recompute job (runs agents, creates proposals, extracts assumptions)
+    // Auto-accept proposals so each phase becomes CLEAN and the cascade propagates fully.
     const result = await executeRecomputeJob(impact.jobId, {
       gatedMode: options?.gatedMode,
+      autoAccept: true,
     });
 
     // 4. Get assumption verification summary
     const assumptionSummary = await getVerificationSummary(projectId);
+
+    // 5. Sync Jira description (non-blocking)
+    syncProjectToJira(projectId, session.userId);
 
     revalidatePath(`/projects/${projectId}/updates`);
     revalidatePath(`/projects/${projectId}/assumptions`);
@@ -90,7 +95,6 @@ export async function triggerCascadeUpdate(
       proposalCount: result.proposals.length,
       errors: result.errors,
       skipped: result.skipped,
-      // Assumption verification status
       assumptionSummary: {
         total: assumptionSummary.totalAssumptions,
         pending: assumptionSummary.pending,
@@ -108,16 +112,70 @@ export async function triggerCascadeUpdate(
 }
 
 // ---------------------------------------------------------------------------
-// Accept Proposal
+// Apply Proposal (shared helper — no auth, used by both accept + auto-accept)
 // ---------------------------------------------------------------------------
 
-/**
- * Accept a proposal:
- * 1. Create a new PhaseArtifact version with the proposed content
- * 2. Mark the phase CLEAN
- * 3. Mark all downstream phases DIRTY (cascade propagation)
- * 4. Update the proposal status to ACCEPTED
- */
+export async function applyProposal(
+  proposalId: string,
+  opts?: { skipMarkDirty?: boolean }
+): Promise<{ newVersion: number }> {
+  const proposal = await prisma.proposal.findUnique({ where: { id: proposalId } });
+  if (!proposal) throw new Error("Proposal not found");
+
+  const proposedJson = proposal.proposedJson as Record<string, unknown>;
+  if (proposedJson?._placeholder) {
+    throw new Error("Cannot apply a stale placeholder.");
+  }
+
+  const latest = await prisma.phaseArtifact.findFirst({
+    where: { projectId: proposal.projectId, phase: proposal.phase },
+    orderBy: { version: "desc" },
+  });
+  const nextVersion = (latest?.version ?? 0) + 1;
+
+  await prisma.phaseArtifact.create({
+    data: {
+      projectId: proposal.projectId,
+      phase: proposal.phase,
+      version: nextVersion,
+      status: "CLEAN",
+      snapshotId: proposal.snapshotId,
+      derivedFromJson: {
+        snapshotId: proposal.snapshotId,
+        baseVersion: proposal.baseArtifactVersion,
+        proposalId: proposal.id,
+      } as Prisma.InputJsonValue,
+      contentJson: proposal.proposedJson as Prisma.InputJsonValue,
+      contentMarkdown: proposal.proposedMarkdown,
+      lastComputedAt: new Date(),
+    },
+  });
+
+  if (proposal.phase === "DISCOVERY") {
+    await syncDiscoveryArtifact(
+      proposal.projectId,
+      proposedJson,
+      proposal.proposedMarkdown,
+      proposal.aiRunIds
+    );
+  }
+
+  await prisma.proposal.update({
+    where: { id: proposalId },
+    data: { status: "ACCEPTED", resolvedAt: new Date() },
+  });
+
+  if (!opts?.skipMarkDirty) {
+    await markDownstreamDirty(proposal.projectId, proposal.phase);
+  }
+
+  return { newVersion: nextVersion };
+}
+
+// ---------------------------------------------------------------------------
+// Accept Proposal (user-facing server action)
+// ---------------------------------------------------------------------------
+
 export async function acceptProposal(proposalId: string) {
   const session = await requireAuth();
 
@@ -134,71 +192,17 @@ export async function acceptProposal(proposalId: string) {
     return { error: `Proposal already ${proposal.status.toLowerCase()}` };
   }
 
-  // Check if this is a stale placeholder
-  const proposedJson = proposal.proposedJson as Record<string, unknown>;
-  if (proposedJson?._placeholder) {
-    return { error: "Cannot accept a stale placeholder. This phase is not implemented yet." };
-  }
-
   try {
-    // Determine next version for this phase
-    const latest = await prisma.phaseArtifact.findFirst({
-      where: { projectId: proposal.projectId, phase: proposal.phase },
-      orderBy: { version: "desc" },
-    });
-    const nextVersion = (latest?.version ?? 0) + 1;
+    const { newVersion } = await applyProposal(proposalId);
 
-    // Create the new PhaseArtifact
-    await prisma.phaseArtifact.create({
-      data: {
-        projectId: proposal.projectId,
-        phase: proposal.phase,
-        version: nextVersion,
-        status: "CLEAN",
-        snapshotId: proposal.snapshotId,
-        derivedFromJson: {
-          snapshotId: proposal.snapshotId,
-          baseVersion: proposal.baseArtifactVersion,
-          proposalId: proposal.id,
-        } as Prisma.InputJsonValue,
-        contentJson: proposal.proposedJson as Prisma.InputJsonValue,
-        contentMarkdown: proposal.proposedMarkdown,
-        lastComputedAt: new Date(),
-      },
-    });
-
-    // Also create a DiscoveryArtifact for backward compat if this is DISCOVERY
-    if (proposal.phase === "DISCOVERY") {
-      await syncDiscoveryArtifact(
-        proposal.projectId,
-        proposedJson,
-        proposal.proposedMarkdown,
-        proposal.aiRunIds
-      );
-    }
-
-    // Update proposal to ACCEPTED
-    await prisma.proposal.update({
-      where: { id: proposalId },
-      data: { status: "ACCEPTED", resolvedAt: new Date() },
-    });
-
-    // Mark downstream phases DIRTY (cascade propagation)
-    const markedDirty = await markDownstreamDirty(
-      proposal.projectId,
-      proposal.phase
-    );
+    syncProjectToJira(proposal.projectId, session.userId);
 
     revalidatePath(`/projects/${proposal.projectId}/updates`);
     revalidatePath(`/projects/${proposal.projectId}`);
     revalidatePath(`/projects/${proposal.projectId}/discovery`);
     revalidatePath(`/projects/${proposal.projectId}/discovery/brief`);
 
-    return {
-      success: true,
-      newVersion: nextVersion,
-      downstreamDirty: markedDirty,
-    };
+    return { success: true, newVersion, downstreamDirty: [] as string[] };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Accept failed";
     return { error: msg };
@@ -257,6 +261,9 @@ export async function rejectProposal(proposalId: string) {
         },
       });
     }
+
+    // Sync Jira description (non-blocking)
+    syncProjectToJira(proposal.projectId, session.userId);
 
     revalidatePath(`/projects/${proposal.projectId}/updates`);
 
@@ -482,6 +489,18 @@ async function syncDiscoveryArtifact(
       evidenceCitations: (snapshot.citations ?? []) as Prisma.InputJsonValue,
     },
   });
+}
+
+/**
+ * Fire-and-forget Jira sync. Imported dynamically to avoid circular deps
+ * and to keep the critical path fast.
+ */
+function syncProjectToJira(projectId: string, userId: string) {
+  import("@/lib/jira/client")
+    .then(({ syncJiraDescription }) => syncJiraDescription(projectId, userId))
+    .catch((err) =>
+      console.warn("[cascade] Jira sync failed (non-blocking):", err),
+    );
 }
 
 /**

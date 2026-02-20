@@ -257,7 +257,7 @@ export default function StoryModeView({
                 Citations
               </span>
               <div className="flex flex-wrap gap-1">
-                {beat.evidenceIds.map((id) => (
+                {[...new Set(beat.evidenceIds)].map((id) => (
                   <span
                     key={id}
                     className="text-[10px] bg-blue-900/20 text-blue-400 px-2 py-0.5 rounded border border-blue-800/30"

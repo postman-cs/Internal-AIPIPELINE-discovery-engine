@@ -22,7 +22,7 @@ export default async function AIRunsPage() {
           <span style={{ color: "var(--foreground)" }}>AI Runs</span>
         </div>
         <h1 className="text-2xl font-bold" style={{ color: "var(--foreground)" }}>
-          AI Pipeline Observability
+          CortexLab Observability
         </h1>
         <p className="text-sm mt-1" style={{ color: "var(--foreground-dim)" }}>
           Every LLM call is logged with prompt hash, token usage, duration, and

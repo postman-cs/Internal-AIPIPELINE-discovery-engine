@@ -13,7 +13,7 @@ interface Payload {
 }
 
 const task: Task = async (payload, helpers) => {
-  const { jobId } = payload as Payload;
+  const { jobId, projectId } = payload as Payload;
   const { logger } = helpers;
 
   logger.info(`Executing recompute job ${jobId}`);
@@ -31,6 +31,21 @@ const task: Task = async (payload, helpers) => {
 
   if (result.errors.length > 0) {
     logger.warn(`Recompute errors: ${result.errors.join("; ")}`);
+  }
+
+  // Sync Jira description after worker-based cascade
+  try {
+    const { prisma } = await import("@/lib/prisma");
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { ownerUserId: true, jiraIssueId: true },
+    });
+    if (project?.jiraIssueId) {
+      const { syncJiraDescription } = await import("@/lib/jira/client");
+      await syncJiraDescription(projectId, project.ownerUserId);
+    }
+  } catch (err) {
+    logger.warn(`Jira sync failed (non-blocking): ${err}`);
   }
 };
 

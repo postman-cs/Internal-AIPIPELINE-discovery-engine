@@ -20,6 +20,15 @@ export default async function ProjectOverviewPage({
   if (!project) notFound();
 
   const session = await requireAuth();
+  const jiraInfo = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: {
+      jiraIssueKey: true,
+      jiraIssueId: true,
+      owner: { select: { jiraBaseUrl: true } },
+    },
+  });
+
   const [evidenceStats, notes, phaseArtifacts, recentAIRuns, assumptionCounts, blockerCounts] = await Promise.all([
     getProjectEvidenceStats(projectId),
     getNotes(projectId),
@@ -84,9 +93,29 @@ export default async function ProjectOverviewPage({
     <div className="max-w-5xl mx-auto px-6 py-8">
       <div className="flex items-start justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold" style={{ color: "var(--foreground)" }}>
-            {project.name}
-          </h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold" style={{ color: "var(--foreground)" }}>
+              {project.name}
+            </h1>
+            {jiraInfo?.jiraIssueKey && jiraInfo.owner?.jiraBaseUrl && (
+              <a
+                href={`${jiraInfo.owner.jiraBaseUrl}/browse/${jiraInfo.jiraIssueKey}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold transition-all duration-200 hover:brightness-110"
+                style={{
+                  background: "rgba(96, 165, 250, 0.1)",
+                  color: "#60a5fa",
+                  border: "1px solid rgba(96, 165, 250, 0.2)",
+                }}
+              >
+                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                </svg>
+                {jiraInfo.jiraIssueKey}
+              </a>
+            )}
+          </div>
           <p className="text-sm mt-1" style={{ color: "var(--foreground-dim)" }}>
             Project Overview
           </p>

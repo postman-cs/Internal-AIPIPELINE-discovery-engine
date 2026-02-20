@@ -3,12 +3,13 @@ import { getSession } from "@/lib/session";
 import { ALL_SOURCES, SOURCE_REGISTRY } from "@/lib/ingest-sources";
 import { IngestActions } from "./IngestActions";
 import { IngestTabs } from "./IngestTabs";
+import { GmailConnectBanner } from "./GmailConnectBanner";
 
 export default async function IngestPage() {
   const session = await getSession();
   const userId = session.userId!;
 
-  const [sourceConfigs, runs, totalBySource, unconsumedBySource] =
+  const [sourceConfigs, runs, totalBySource, unconsumedBySource, user] =
     await Promise.all([
       prisma.ingestSourceConfig.findMany({
         where: { userId },
@@ -28,6 +29,10 @@ export default async function IngestPage() {
         by: ["source"],
         where: { consumedAt: null },
         _count: { id: true },
+      }),
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { googleRefreshToken: true, googleEmail: true },
       }),
     ]);
 
@@ -51,6 +56,11 @@ export default async function IngestPage() {
   const connectedCount = sourceConfigs.filter((c) => c.enabled).length;
   const allSourceMeta = ALL_SOURCES.map((s) => SOURCE_REGISTRY[s]);
 
+  const gmailConnected = !!user?.googleRefreshToken;
+  const oauthConfigured = !!(
+    process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+  );
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10">
       <div className="flex items-center justify-between mb-6">
@@ -64,6 +74,12 @@ export default async function IngestPage() {
         </div>
         <IngestActions connectedCount={connectedCount} />
       </div>
+
+      <GmailConnectBanner
+        isConnected={gmailConnected}
+        googleEmail={user?.googleEmail ?? null}
+        oauthConfigured={oauthConfigured}
+      />
 
       <IngestTabs
         allSources={allSourceMeta}

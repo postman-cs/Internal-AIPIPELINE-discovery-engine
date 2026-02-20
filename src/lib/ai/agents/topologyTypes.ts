@@ -9,21 +9,21 @@
 
 import { z } from "zod";
 
-const Confidence = z.enum(["High", "Medium", "Low"]);
+const normalizeConfidence = (v: string) => {
+  const cap = v.charAt(0).toUpperCase() + v.slice(1).toLowerCase();
+  return (["High", "Medium", "Low"].includes(cap)) ? cap : "Medium";
+};
+const Confidence = z.string().transform(normalizeConfidence);
 
 // ---------------------------------------------------------------------------
 // Shared topology primitives
 // ---------------------------------------------------------------------------
 
-export const TopologyNodeTypeZ = z.enum([
-  "SERVICE", "API", "GATEWAY", "DATABASE", "IDENTITY_PROVIDER",
-  "CDN", "LOAD_BALANCER", "CLIENT", "EXTERNAL_SYSTEM", "QUEUE", "STORAGE",
-]);
+const normalizeUpper = (v: string) => v.toUpperCase().replace(/[\s-]+/g, "_");
 
-export const TopologyEdgeTypeZ = z.enum([
-  "CALLS", "AUTHENTICATES_WITH", "ROUTES_THROUGH",
-  "READS_FROM", "WRITES_TO", "DEPENDS_ON",
-]);
+export const TopologyNodeTypeZ = z.string().transform(normalizeUpper);
+
+export const TopologyEdgeTypeZ = z.string().transform(normalizeUpper);
 
 // ---------------------------------------------------------------------------
 // 1. Current Topology Builder
@@ -34,16 +34,16 @@ export const topologyNodeSchema = z.object({
   type: TopologyNodeTypeZ,
   name: z.string(),
   metadata: z.record(z.unknown()).optional(),
-  evidenceIds: z.array(z.string()),
-  confidence: Confidence,
+  evidenceIds: z.array(z.string()).optional().default([]),
+  confidence: z.string().optional().default("Medium").transform(normalizeConfidence),
 });
 
 export const topologyEdgeSchema = z.object({
   from: z.string(),
   to: z.string(),
   type: TopologyEdgeTypeZ,
-  evidenceIds: z.array(z.string()),
-  confidence: Confidence,
+  evidenceIds: z.array(z.string()).optional().default([]),
+  confidence: z.string().optional().default("Medium").transform(normalizeConfidence),
 });
 
 export const currentTopologyOutputSchema = z.object({
@@ -62,8 +62,8 @@ export const futureStateOutputSchema = z.object({
   targetNodes: z.array(topologyNodeSchema),
   targetEdges: z.array(topologyEdgeSchema),
   deltaSummary: z.string(),
-  recommendedPatterns: z.array(z.string()),
-  evidenceIds: z.array(z.string()),
+  recommendedPatterns: z.array(z.string()).optional().default([]),
+  evidenceIds: z.array(z.string()).optional().default([]),
 });
 
 export type FutureStateOutput = z.infer<typeof futureStateOutputSchema>;
@@ -73,12 +73,12 @@ export type FutureStateOutput = z.infer<typeof futureStateOutputSchema>;
 // ---------------------------------------------------------------------------
 
 export const refactorActionSchema = z.object({
-  actionType: z.enum(["ADD", "REMOVE", "MODIFY"]),
+  actionType: z.string().transform(normalizeUpper),
   targetComponent: z.string(),
   description: z.string(),
-  impactAnalysis: z.string(),
-  evidenceIds: z.array(z.string()),
-  confidence: Confidence,
+  impactAnalysis: z.string().optional().default(""),
+  evidenceIds: z.array(z.string()).optional().default([]),
+  confidence: z.string().optional().default("Medium").transform(normalizeConfidence),
 });
 
 export const solutionDesignOutputSchema = z.object({
@@ -94,62 +94,62 @@ export type SolutionDesignOutput = z.infer<typeof solutionDesignOutputSchema>;
 // ---------------------------------------------------------------------------
 
 export const cloudResourceSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  provider: z.string(),          // aws, azure, gcp, on_prem, multi, generic
-  providerLabel: z.string(),     // "AWS", "Azure", "GCP", "On-Premises", "Multi-Cloud"
-  service: z.string(),           // e.g. "API Gateway", "Lambda", "ECS", "Cloud Run", "AKS"
-  resourceType: z.string(),      // e.g. "compute", "gateway", "database", "storage", "network", "iam"
-  topologyNodeId: z.string().optional(), // maps to a topology node
-  provisioningStatus: z.enum(["not_provisioned", "planned", "provisioned", "drifted"]),
-  configLanguage: z.string(),    // hcl, yaml, bicep, json, etc.
-  evidenceIds: z.array(z.string()),
-  confidence: Confidence,
-});
+  id: z.string().optional().default(""),
+  name: z.string().optional().default(""),
+  provider: z.string().optional().default("generic"),
+  providerLabel: z.string().optional().default(""),
+  service: z.string().optional().default(""),
+  resourceType: z.string().optional().default(""),
+  topologyNodeId: z.string().optional(),
+  provisioningStatus: z.string().optional().default("planned"),
+  configLanguage: z.string().optional().default("yaml"),
+  evidenceIds: z.array(z.string()).optional().default([]),
+  confidence: z.string().optional().default("Medium").transform(normalizeConfidence),
+}).passthrough();
 
 export const iacSnippetSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  description: z.string(),
-  provider: z.string(),          // slug: terraform, pulumi, cloudformation, bicep, helm, k8s, docker
-  providerLabel: z.string(),     // "Terraform", "Pulumi", "CloudFormation", "Bicep", "Helm", "Kubernetes", "Docker"
-  configLanguage: z.string(),    // hcl, yaml, json, typescript, bicep, dockerfile
-  filename: z.string(),          // e.g. "main.tf", "k8s/deployment.yaml", "Dockerfile"
-  content: z.string(),           // the actual IaC config content
-  targetResources: z.array(z.string()), // cloudResource IDs this manages
-});
+  id: z.string().optional().default(""),
+  name: z.string().optional().default(""),
+  description: z.string().optional().default(""),
+  provider: z.string().optional().default(""),
+  providerLabel: z.string().optional().default(""),
+  configLanguage: z.string().optional().default("yaml"),
+  filename: z.string().optional().default(""),
+  content: z.string().optional().default(""),
+  targetResources: z.array(z.string()).optional().default([]),
+}).passthrough();
 
 export const containerManifestSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  description: z.string(),
-  type: z.enum(["dockerfile", "k8s_manifest", "helm_values", "compose", "k8s_service", "k8s_ingress"]),
-  filename: z.string(),
-  content: z.string(),
-  targetService: z.string().optional(), // topology node ID
-});
+  id: z.string().optional().default(""),
+  name: z.string().optional().default(""),
+  description: z.string().optional().default(""),
+  type: z.string().optional().default(""),
+  filename: z.string().optional().default(""),
+  content: z.string().optional().default(""),
+  targetService: z.string().optional(),
+}).passthrough();
 
 export const secretsBlueprintItemSchema = z.object({
-  secretName: z.string(),        // e.g. "POSTMAN_API_KEY", "DB_PASSWORD"
-  description: z.string(),
-  required: z.boolean(),
-  category: z.enum(["postman", "ci_cd", "cloud", "application", "database"]),
+  secretName: z.string().optional().default(""),
+  description: z.string().optional().default(""),
+  required: z.boolean().optional().default(false),
+  category: z.string().optional().default("application"),
   platforms: z.array(z.object({
-    platform: z.string(),        // github_actions, gitlab_ci, aws_secrets_manager, vault, etc.
-    platformLabel: z.string(),
-    configPath: z.string(),      // where to configure it (e.g. "Settings > Secrets > Actions")
-    configSnippet: z.string().optional(), // optional setup snippet
-  })),
-});
+    platform: z.string(),
+    platformLabel: z.string().optional().default(""),
+    configPath: z.string().optional().default(""),
+    configSnippet: z.string().optional(),
+  }).passthrough()).optional().default([]),
+}).passthrough();
 
 export const infrastructureOutputSchema = z.object({
   cloudResources: z.array(cloudResourceSchema),
-  iacSnippets: z.array(iacSnippetSchema),
+  iacSnippets: z.array(iacSnippetSchema).optional().default([]),
   containerManifests: z.array(containerManifestSchema).optional(),
   secretsBlueprint: z.array(secretsBlueprintItemSchema).optional(),
-  provisioningOrder: z.array(z.string()),    // ordered resource IDs for provisioning
+  provisioningOrder: z.array(z.string()).optional().default([]),
   estimatedMonthlyCost: z.string().optional(),
-  notes: z.array(z.string()),
+  notes: z.array(z.string()).optional().default([]),
 });
 
 export type InfrastructureOutput = z.infer<typeof infrastructureOutputSchema>;
@@ -160,19 +160,19 @@ export type InfrastructureOutput = z.infer<typeof infrastructureOutputSchema>;
 
 export const testCaseSchema = z.object({
   name: z.string(),
-  objective: z.string(),
-  targetComponentId: z.string(),
-  testType: z.enum(["Smoke", "Integration", "Contract", "Load"]),
-  steps: z.array(z.string()),
-  expectedResult: z.string(),
-  evidenceIds: z.array(z.string()),
-  postmanTestScript: z.string().optional(),  // pm.test("...") assertion snippet
-  newmanCommand: z.string().optional(),      // CLI invocation string
-});
+  objective: z.string().optional().default(""),
+  targetComponentId: z.string().optional().default(""),
+  testType: z.string().optional().default("Integration"),
+  steps: z.array(z.string()).optional().default([]),
+  expectedResult: z.string().optional().default(""),
+  evidenceIds: z.array(z.string()).optional().default([]),
+  postmanTestScript: z.string().optional(),
+  newmanCommand: z.string().optional(),
+}).passthrough();
 
 export const testDesignOutputSchema = z.object({
   testCases: z.array(testCaseSchema),
-  coverageSummary: z.string(),
+  coverageSummary: z.string().optional().default(""),
 });
 
 export type TestDesignOutput = z.infer<typeof testDesignOutputSchema>;
@@ -192,7 +192,7 @@ export const postmanCollectionStubSchema = z.object({
   folders: z.array(z.object({
     name: z.string(),
     requests: z.array(z.object({
-      method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]),
+      method: z.string().transform(normalizeUpper),
       name: z.string(),
       urlPattern: z.string(),
       description: z.string(),
@@ -221,15 +221,15 @@ export const ciCdPipelineSchema = z.object({
 
 export const craftSolutionOutputSchema = z.object({
   implementationPlan: z.array(z.object({
-    step: z.number(),
+    step: z.number().optional().default(0),
     title: z.string(),
-    description: z.string(),
-    targetComponents: z.array(z.string()),
-    evidenceIds: z.array(z.string()),
-  })),
-  migrationSteps: z.array(z.string()),
-  ciCdNotes: z.array(z.string()),
-  estimatedEffort: z.string(),
+    description: z.string().optional().default(""),
+    targetComponents: z.array(z.string()).optional().default([]),
+    evidenceIds: z.array(z.string()).optional().default([]),
+  }).passthrough()),
+  migrationSteps: z.array(z.string()).optional().default([]),
+  ciCdNotes: z.array(z.string()).optional().default([]),
+  estimatedEffort: z.string().optional().default(""),
   postmanCollections: z.array(postmanCollectionStubSchema).optional(),
   newmanRunConfigs: z.array(newmanRunConfigSchema).optional(),
   ciCdPipelines: z.array(ciCdPipelineSchema).optional(),
@@ -251,7 +251,7 @@ export const testSolutionOutputSchema = z.object({
   rollbackTriggers: z.array(z.object({
     condition: z.string(),
     action: z.string(),
-    severity: z.enum(["Critical", "High", "Medium", "Low"]),
+    severity: z.string(),
   })),
   monitoringHooks: z.array(z.object({
     metric: z.string(),
@@ -268,50 +268,73 @@ export type TestSolutionOutput = z.infer<typeof testSolutionOutputSchema>;
 // ---------------------------------------------------------------------------
 
 export const deploymentStepSchema = z.object({
-  phase: z.string(),
-  title: z.string(),
-  description: z.string(),
-  targetComponents: z.array(z.string()),
-  prerequisites: z.array(z.string()),
-  rollbackPlan: z.string(),
-  estimatedDuration: z.string(),
-  evidenceIds: z.array(z.string()),
-});
+  phase: z.string().optional().default(""),
+  title: z.string().optional().default(""),
+  name: z.string().optional(),
+  description: z.string().optional().default(""),
+  targetComponents: z.array(z.string()).optional().default([]),
+  prerequisites: z.array(z.string()).optional().default([]),
+  rollbackPlan: z.string().optional().default(""),
+  estimatedDuration: z.string().optional().default(""),
+  evidenceIds: z.array(z.string()).optional().default([]),
+}).passthrough().transform((v) => ({ ...v, title: v.title || v.name || "" }));
 
 export const ciCdStageSchema = z.object({
-  stageName: z.string(),
-  platform: CiCdPlatformZ,         // slug
-  platformLabel: z.string(),       // human-readable
-  configLanguage: z.string(),      // syntax hint for rendering
-  triggerCondition: z.string(),
-  configSnippet: z.string(),       // config snippet in the platform's native syntax
-  gateChecks: z.array(z.string()),
-});
+  stageName: z.string().optional().default(""),
+  platform: CiCdPlatformZ.optional().default("generic"),
+  platformLabel: z.string().optional().default(""),
+  configLanguage: z.string().optional().default("yaml"),
+  triggerCondition: z.string().optional().default(""),
+  configSnippet: z.string().optional().default(""),
+  gateChecks: z.array(z.string()).optional().default([]),
+}).passthrough();
 
 export const environmentPromotionGateSchema = z.object({
-  fromEnv: z.string(),
-  toEnv: z.string(),
-  requiredChecks: z.array(z.string()),
-  approvalRequired: z.boolean(),
-  newmanSuiteRef: z.string().optional(),  // which newman config must pass
-});
+  fromEnv: z.string().optional().default(""),
+  toEnv: z.string().optional().default(""),
+  requiredChecks: z.array(z.string()).optional().default([]),
+  approvalRequired: z.boolean().optional().default(false),
+  newmanSuiteRef: z.string().optional(),
+}).passthrough();
 
 export const deploymentPlanOutputSchema = z.object({
   deploymentSteps: z.array(deploymentStepSchema),
-  changeManagementNotes: z.array(z.string()),
+  changeManagementNotes: z.array(z.string()).optional().default([]),
   trainingRequirements: z.array(z.object({
-    audience: z.string(),
-    topic: z.string(),
-    format: z.string(),
-    evidenceIds: z.array(z.string()),
-  })),
+    audience: z.string().optional().default(""),
+    topic: z.string().optional().default(""),
+    format: z.string().optional().default(""),
+    evidenceIds: z.array(z.string()).optional().default([]),
+  }).passthrough()).optional().default([]),
   communicationPlan: z.array(z.object({
-    stakeholder: z.string(),
-    message: z.string(),
-    timing: z.string(),
-  })),
-  goLiveCriteria: z.array(z.string()),
-  overallTimeline: z.string(),
+    stakeholder: z.string().optional().default(""),
+    message: z.string().optional().default(""),
+    timing: z.string().optional().default(""),
+  }).passthrough()).optional().default([]),
+  goLiveCriteria: z.array(z.string()).optional().default([]),
+  overallTimeline: z.unknown().transform((val) => {
+    if (typeof val === "string") return val;
+    if (Array.isArray(val)) {
+      return val.map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          const o = item as Record<string, unknown>;
+          const phase = o.phase ?? o.name ?? o.step ?? "";
+          const duration = o.duration ?? o.timeline ?? o.estimatedDuration ?? "";
+          if (phase && duration) return `${phase}: ${duration}`;
+          const vals = Object.values(o).filter(v => typeof v === "string" && v.length > 0);
+          return vals.join(" — ");
+        }
+        return String(item);
+      }).filter(Boolean).join("\n");
+    }
+    if (val && typeof val === "object") {
+      return Object.entries(val as Record<string, unknown>)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join("\n");
+    }
+    return "";
+  }).optional().default(""),
   ciCdStages: z.array(ciCdStageSchema).optional(),
   environmentPromotionGates: z.array(environmentPromotionGateSchema).optional(),
 });
@@ -323,59 +346,72 @@ export type DeploymentPlanOutput = z.infer<typeof deploymentPlanOutputSchema>;
 // ---------------------------------------------------------------------------
 
 export const monitorSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  type: z.enum(["SLO", "Alert", "HealthCheck", "SentimentTracker", "UsageMetric"]),
-  targetComponentId: z.string(),
-  description: z.string(),
+  id: z.string().optional().default(""),
+  name: z.string().optional().default(""),
+  type: z.string().optional().default(""),
+  targetComponentId: z.string().optional().default(""),
+  description: z.string().optional().default(""),
   threshold: z.string().optional(),
-  frequency: z.string(),
-  evidenceIds: z.array(z.string()),
-  confidence: Confidence,
-});
+  frequency: z.string().optional().default(""),
+  evidenceIds: z.array(z.string()).optional().default([]),
+  confidence: z.string().optional().default("Medium").transform(normalizeConfidence),
+}).passthrough();
 
 export const postmanMonitorSchema = z.object({
-  name: z.string(),
-  collectionRef: z.string(),
-  environmentRef: z.string(),
-  schedule: z.string(),              // e.g. "every 5 minutes"
-  regions: z.array(z.string()),      // e.g. ["us-east-1","eu-west-1"]
-  alertChannels: z.array(z.string()),
-  targetComponentId: z.string(),
-});
+  name: z.string().optional().default(""),
+  collectionRef: z.string().optional().default(""),
+  environmentRef: z.string().optional().default(""),
+  schedule: z.string().optional().default(""),
+  regions: z.array(z.string()).optional().default([]),
+  alertChannels: z.array(z.string()).optional().default([]),
+  targetComponentId: z.string().optional().default(""),
+}).passthrough();
 
 export const monitoringOutputSchema = z.object({
-  monitors: z.array(monitorSchema),
+  monitors: z.array(monitorSchema).optional().default([]),
   sloDefinitions: z.array(z.object({
-    name: z.string(),
-    targetComponentId: z.string(),
-    metric: z.string(),
-    target: z.string(),
-    window: z.string(),
-    evidenceIds: z.array(z.string()),
-  })),
+    name: z.string().optional().default(""),
+    targetComponentId: z.string().optional().default(""),
+    metric: z.string().optional().default(""),
+    target: z.union([z.string(), z.number().transform(String)]).optional().default(""),
+    window: z.string().optional().default(""),
+    evidenceIds: z.array(z.string()).optional().default([]),
+  }).passthrough()).optional().default([]),
   alertRules: z.array(z.object({
-    name: z.string(),
-    condition: z.string(),
-    severity: z.enum(["Critical", "High", "Medium", "Low"]),
-    action: z.string(),
-    targetComponentId: z.string(),
-  })),
+    name: z.string().optional().default(""),
+    condition: z.string().optional().default(""),
+    severity: z.string().optional().default("Medium"),
+    action: z.string().optional().default(""),
+    targetComponentId: z.string().optional().default(""),
+  }).passthrough()).optional().default([]),
   dashboardSpec: z.object({
     panels: z.array(z.object({
-      title: z.string(),
-      metricQuery: z.string(),
-      visualizationType: z.string(),
-    })),
-  }),
+      title: z.string().optional().default(""),
+      metricQuery: z.string().optional().default(""),
+      visualizationType: z.string().optional().default("line"),
+    }).passthrough()).optional().default([]),
+  }).optional().default({ panels: [] }),
   renewalSignals: z.array(z.object({
-    signal: z.string(),
-    indicator: z.enum(["Positive", "Negative", "Neutral"]),
-    description: z.string(),
-    evidenceIds: z.array(z.string()),
-  })),
+    signal: z.string().optional().default(""),
+    indicator: z.string().optional().default("Neutral"),
+    description: z.string().optional().default(""),
+    evidenceIds: z.array(z.string()).optional().default([]),
+  }).passthrough()).optional().default([]),
   postmanMonitors: z.array(postmanMonitorSchema).optional(),
-});
+}).transform((v) => ({
+  ...v,
+  monitors: v.monitors.length > 0 ? v.monitors :
+    (v.postmanMonitors ?? []).map((pm, i) => ({
+      id: pm.name || `monitor-${i}`,
+      name: pm.name,
+      type: "postman_monitor",
+      targetComponentId: pm.targetComponentId,
+      description: `Postman monitor: ${pm.collectionRef}`,
+      frequency: pm.schedule,
+      evidenceIds: [] as string[],
+      confidence: "Medium" as const,
+    })),
+}));
 
 export type MonitoringOutput = z.infer<typeof monitoringOutputSchema>;
 
@@ -384,37 +420,37 @@ export type MonitoringOutput = z.infer<typeof monitoringOutputSchema>;
 // ---------------------------------------------------------------------------
 
 export const iterationItemSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  type: z.enum(["Enhancement", "BugFix", "Optimization", "NewCapability", "Deprecation", "Investigation"]),
-  priority: z.enum(["Critical", "High", "Medium", "Low"]),
-  description: z.string(),
-  targetComponentIds: z.array(z.string()),
-  triggerSource: z.enum(["MonitoringSignal", "UserFeedback", "DriftDetection", "FailureAnalysis", "ProactiveImprovement"]),
-  expectedOutcome: z.string(),
-  estimatedEffort: z.string(),
-  evidenceIds: z.array(z.string()),
-  confidence: Confidence,
-});
+  id: z.string().optional().default(""),
+  title: z.string().optional().default(""),
+  type: z.string().optional().default(""),
+  priority: z.string().optional().default("Medium"),
+  description: z.string().optional().default(""),
+  targetComponentIds: z.array(z.string()).optional().default([]),
+  triggerSource: z.string().optional().default(""),
+  expectedOutcome: z.string().optional().default(""),
+  estimatedEffort: z.string().optional().default(""),
+  evidenceIds: z.array(z.string()).optional().default([]),
+  confidence: z.string().optional().default("Medium").transform(normalizeConfidence),
+}).passthrough();
 
 export const iterationOutputSchema = z.object({
   backlogItems: z.array(iterationItemSchema),
   priorityMatrix: z.object({
-    criticalPath: z.array(z.string()),
-    quickWins: z.array(z.string()),
-    strategicInvestments: z.array(z.string()),
-    deferred: z.array(z.string()),
-  }),
+    criticalPath: z.array(z.string()).optional().default([]),
+    quickWins: z.array(z.string()).optional().default([]),
+    strategicInvestments: z.array(z.string()).optional().default([]),
+    deferred: z.array(z.string()).optional().default([]),
+  }).optional().default({}),
   driftAnalysis: z.object({
-    driftDetected: z.boolean(),
+    driftDetected: z.boolean().optional().default(false),
     driftAreas: z.array(z.object({
       area: z.string(),
-      description: z.string(),
-      severity: z.enum(["High", "Medium", "Low"]),
-      evidenceIds: z.array(z.string()),
-    })),
-  }),
-  nextCycleRecommendation: z.string(),
+      description: z.string().optional().default(""),
+      severity: z.string().optional().default("Medium"),
+      evidenceIds: z.array(z.string()).optional().default([]),
+    }).passthrough()).optional().default([]),
+  }).optional().default({ driftDetected: false, driftAreas: [] }),
+  nextCycleRecommendation: z.string().optional().default(""),
 });
 
 export type IterationOutput = z.infer<typeof iterationOutputSchema>;
@@ -632,7 +668,7 @@ export const missileDesignSchema = z.object({
   estimatedEffort: z.string(),
   successCriteria: z.string(),
   fallbackPlan: z.string(),
-  probabilityOfSuccess: z.enum(["high", "medium", "low"]),
+  probabilityOfSuccess: z.string(),
 });
 
 export type MissileDesign = z.infer<typeof missileDesignSchema>;

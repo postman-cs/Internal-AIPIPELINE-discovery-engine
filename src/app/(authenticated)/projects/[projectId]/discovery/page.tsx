@@ -92,8 +92,8 @@ export default async function DiscoveryPage({
         </p>
         <div className="flex items-center gap-1 overflow-x-auto pb-1">
           {[
-            { label: "Evidence", done: evidenceStats.chunkCount > 0, color: "#ff6c37", count: evidenceStats.chunkCount },
-            { label: "AI Pipeline", done: !!artifact?.aiGenerated, color: "#06d6d6", count: recentRuns.filter((r) => r.status === "SUCCESS").length },
+            { label: "Evidence", done: evidenceStats.chunkCount > 0, color: "#22c55e", count: evidenceStats.chunkCount },
+            { label: "CortexLab", done: !!artifact?.aiGenerated, color: "#06d6d6", count: recentRuns.filter((r) => r.status === "SUCCESS").length },
             { label: "Discovery Brief", done: !!artifact, color: "#34d399", count: artifact?.version ?? 0 },
             { label: "Assumptions", done: assumptionCount === 0 && !!artifact, color: assumptionCount > 0 ? "#fbbf24" : "#34d399", count: assumptionCount },
             { label: "Cascade", done: false, color: "var(--foreground-dim)", count: null },

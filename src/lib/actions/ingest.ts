@@ -203,6 +203,53 @@ function generateMockItemsForSources(
 }
 
 // ---------------------------------------------------------------------------
+// Gmail real ingest helper
+// ---------------------------------------------------------------------------
+
+async function runGmailIngestForUser(
+  userId: string,
+  runId: string,
+): Promise<{ itemCount: number; errors: string[] }> {
+  const { ingestGmailForProject } = await import("@/lib/gmail/ingest");
+
+  const projects = await prisma.project.findMany({
+    where: { ownerUserId: userId, gmailLabelId: { not: null } },
+    select: { id: true, name: true },
+  });
+
+  let totalItems = 0;
+  const errors: string[] = [];
+
+  for (const project of projects) {
+    try {
+      const result = await ingestGmailForProject(project.id, userId);
+      totalItems += result.documentsIngested + result.attachmentsProcessed;
+      if (result.errors.length > 0) {
+        errors.push(...result.errors.map((e) => `[${project.name}] ${e}`));
+      }
+
+      for (let i = 0; i < result.documentsIngested; i++) {
+        await prisma.ingestItem.create({
+          data: {
+            ingestRunId: runId,
+            source: "GMAIL",
+            externalId: `gmail-real-${project.id}-${Date.now()}-${i}`,
+            title: `Gmail thread from ${project.name}`,
+            rawText: null,
+            metadataJson: JSON.stringify({ realGmail: true, projectId: project.id }),
+          },
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`[${project.name}] ${msg}`);
+    }
+  }
+
+  return { itemCount: totalItems, errors };
+}
+
+// ---------------------------------------------------------------------------
 // Ingest run execution
 // ---------------------------------------------------------------------------
 
@@ -216,13 +263,11 @@ export async function runIngestAction(sourcesFilter?: SourceKey[]) {
       where: { userId: session.userId, enabled: true },
     });
     sources = configs.map((c) => c.source as SourceKey);
-    // If nothing connected, ingest all as demo
     if (sources.length === 0) {
       sources = [...ALL_SOURCES];
     }
   }
 
-  // Create the run
   const run = await prisma.ingestRun.create({
     data: {
       userId: session.userId,
@@ -232,28 +277,52 @@ export async function runIngestAction(sourcesFilter?: SourceKey[]) {
     },
   });
 
-  // Generate mock items
-  const mockItems = generateMockItemsForSources(run.id, sources);
-  await prisma.ingestItem.createMany({ data: mockItems });
-
-  // Compute counts
   const counts: Record<string, number> = {};
-  for (const item of mockItems) {
-    counts[item.source] = (counts[item.source] || 0) + 1;
+  let totalItemCount = 0;
+
+  // Separate real Gmail from mock sources
+  const gmailRequested = sources.includes("GMAIL");
+  const mockSources = sources.filter((s) => s !== "GMAIL");
+
+  // Real Gmail ingest
+  if (gmailRequested) {
+    const user = await prisma.user.findUnique({
+      where: { id: session.userId },
+      select: { googleRefreshToken: true },
+    });
+
+    if (user?.googleRefreshToken) {
+      const gmailResult = await runGmailIngestForUser(session.userId, run.id);
+      counts["GMAIL"] = gmailResult.itemCount;
+      totalItemCount += gmailResult.itemCount;
+    } else {
+      const mockItems = generateMockItemsForSources(run.id, ["GMAIL"]);
+      await prisma.ingestItem.createMany({ data: mockItems });
+      counts["GMAIL"] = mockItems.length;
+      totalItemCount += mockItems.length;
+    }
   }
 
-  // Finish the run
+  // Mock data for other sources
+  if (mockSources.length > 0) {
+    const mockItems = generateMockItemsForSources(run.id, mockSources);
+    await prisma.ingestItem.createMany({ data: mockItems });
+    for (const item of mockItems) {
+      counts[item.source] = (counts[item.source] || 0) + 1;
+    }
+    totalItemCount += mockItems.length;
+  }
+
   await prisma.ingestRun.update({
     where: { id: run.id },
     data: {
       status: "SUCCESS",
       finishedAt: new Date(),
-      summary: `Ingested ${mockItems.length} items from ${sources.length} source${sources.length > 1 ? "s" : ""}: ${sources.join(", ")}`,
+      summary: `Ingested ${totalItemCount} items from ${sources.length} source${sources.length > 1 ? "s" : ""}: ${sources.join(", ")}`,
       countsJson: JSON.stringify(counts),
     },
   });
 
-  // Update lastSync on source configs
   for (const source of sources) {
     await prisma.ingestSourceConfig
       .update({
@@ -273,11 +342,45 @@ export async function runIngestAction(sourcesFilter?: SourceKey[]) {
 
   revalidatePath("/ingest");
   revalidatePath("/dashboard");
-  return { success: true, runId: run.id, itemCount: mockItems.length };
+  return { success: true, runId: run.id, itemCount: totalItemCount };
 }
 
 export async function runSingleSourceIngest(source: SourceKey) {
   return runIngestAction([source]);
+}
+
+export async function runGmailIngestForProjectAction(projectId: string) {
+  const session = await requireAuth();
+
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, ownerUserId: session.userId },
+    select: { id: true, gmailLabelId: true, name: true },
+  });
+
+  if (!project) return { error: "Project not found" };
+  if (!project.gmailLabelId)
+    return { error: "No Gmail label configured for this project" };
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { googleRefreshToken: true },
+  });
+  if (!user?.googleRefreshToken) return { error: "Gmail not connected" };
+
+  const { ingestGmailForProject } = await import("@/lib/gmail/ingest");
+  const result = await ingestGmailForProject(projectId, session.userId);
+
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/ingest");
+  revalidatePath("/dashboard");
+
+  return {
+    success: true,
+    threadsFound: result.threadsFound,
+    documentsIngested: result.documentsIngested,
+    attachmentsProcessed: result.attachmentsProcessed,
+    errors: result.errors,
+  };
 }
 
 // ---------------------------------------------------------------------------

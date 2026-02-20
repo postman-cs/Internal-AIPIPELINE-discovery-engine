@@ -235,8 +235,8 @@ export const SOURCE_REGISTRY: Record<SourceKey, SourceMeta> = {
     description:
       "Paste or upload any content — architecture diagrams, meeting notes, screenshots, competitive intel. Your catch-all source.",
     icon: "📎",
-    color: "text-orange-600",
-    bgColor: "bg-orange-50 dark:bg-orange-950/30",
+    color: "text-green-600",
+    bgColor: "bg-green-50 dark:bg-green-950/30",
     setupInstructions:
       "No setup needed! Manual upload is always available. Use it for ad-hoc intel: pasting text from anywhere, uploading documents, or capturing notes.",
     configFields: [],

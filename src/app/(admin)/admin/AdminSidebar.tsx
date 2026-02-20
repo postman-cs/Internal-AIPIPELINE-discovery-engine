@@ -83,9 +83,9 @@ export function AdminSidebar({ userName }: { userName?: string }) {
             className="w-7 h-7 rounded-lg flex items-center justify-center"
             style={{ background: "linear-gradient(135deg, #8b5cf6, #6d28d9)", boxShadow: "0 0 16px rgba(139, 92, 246, 0.3)" }}
           >
-            <span className="text-white text-[10px] font-bold">ADM</span>
+            <span className="text-white text-[10px] font-bold">CL</span>
           </div>
-          <span className="font-semibold text-sm" style={{ color: "var(--foreground)" }}>Admin Panel</span>
+          <span className="font-semibold text-sm" style={{ color: "var(--foreground)" }}>CortexLab Admin</span>
         </Link>
       </div>
 

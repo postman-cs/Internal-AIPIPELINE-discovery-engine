@@ -85,16 +85,24 @@ export async function retrieveMultiQueryEvidence(
   const seen = new Set<string>();
 
   for (const query of queries) {
-    const results = await retrieveEvidence(projectId, query, topKPerQuery);
-    for (const r of results) {
-      if (!seen.has(r.evidenceId)) {
-        seen.add(r.evidenceId);
-        allResults.push(r);
+    try {
+      const results = await Promise.race([
+        retrieveEvidence(projectId, query, topKPerQuery),
+        new Promise<EvidenceResult[]>((_, reject) =>
+          setTimeout(() => reject(new Error("Evidence retrieval timed out")), 30_000)
+        ),
+      ]);
+      for (const r of results) {
+        if (!seen.has(r.evidenceId)) {
+          seen.add(r.evidenceId);
+          allResults.push(r);
+        }
       }
+    } catch {
+      // Non-fatal: continue with remaining queries if one fails/times out
     }
   }
 
-  // Sort by score descending
   return allResults.sort((a, b) => b.score - a.score);
 }
 

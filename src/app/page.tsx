@@ -9,17 +9,17 @@ export default function HomePage() {
       {/* Animated orbs */}
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-3xl animate-pulse-glow" />
       <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-purple-500/5 rounded-full blur-3xl animate-pulse-glow" style={{ animationDelay: "1.5s" }} />
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-orange-500/5 rounded-full blur-3xl" />
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-green-500/5 rounded-full blur-3xl" />
 
       <div className="text-center max-w-2xl px-4 relative z-10">
         {/* Logo */}
         <div className="animate-float mb-10">
           <div className="w-20 h-20 rounded-2xl mx-auto flex items-center justify-center relative"
                style={{
-                 background: "linear-gradient(135deg, #ff6c37, #e5552a)",
-                 boxShadow: "0 0 40px rgba(255, 108, 55, 0.3), 0 0 80px rgba(255, 108, 55, 0.1)"
+                 background: "linear-gradient(135deg, #22c55e, #16a34a)",
+                 boxShadow: "0 0 40px rgba(34, 197, 94, 0.3), 0 0 80px rgba(34, 197, 94, 0.1)"
                }}>
-            <span className="text-white text-3xl font-bold tracking-tight">AI</span>
+            <span className="text-white text-3xl font-bold tracking-tight">CL</span>
           </div>
         </div>
 
@@ -29,7 +29,7 @@ export default function HomePage() {
               WebkitBackgroundClip: "text",
               WebkitTextFillColor: "transparent",
             }}>
-          AI Pipeline
+          CortexLab
         </h1>
         <p className="text-lg mb-2" style={{ color: "var(--accent-cyan)" }}>
           Postman CSE Discovery & Intelligence Workflow

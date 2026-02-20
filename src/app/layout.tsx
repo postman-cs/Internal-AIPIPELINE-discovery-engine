@@ -10,8 +10,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "AI Pipeline - CSE Intelligence Workflow",
-  description: "Internal AI Pipeline for Postman CSE workflow",
+  title: "CortexLab - CSE Intelligence Workflow",
+  description: "CortexLab — Postman CSE discovery & intelligence platform",
 };
 
 export default function RootLayout({

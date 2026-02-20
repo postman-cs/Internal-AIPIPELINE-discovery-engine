@@ -40,7 +40,7 @@ export function ManualUpload() {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="flex items-start gap-3 mb-2">
-        <div className="w-10 h-10 rounded-lg flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(255,108,55,0.08)" }}>
+        <div className="w-10 h-10 rounded-lg flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(34,197,94,0.08)" }}>
           📎
         </div>
         <div>

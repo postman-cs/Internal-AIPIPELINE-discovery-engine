@@ -127,6 +127,8 @@ export default function ConstellationView({
   const [showFilters, setShowFilters] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fgRef = useRef<any>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
 
   // Dimensions
@@ -209,6 +211,16 @@ export default function ConstellationView({
       graphLinks: gLinks,
     };
   }, [nodes, edges, search, typeFilter, confidenceFilter, degreeMap]);
+
+  // Spread out the force layout so nodes don't overlap
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    fg.d3Force("charge")?.strength(-300);
+    fg.d3Force("link")?.distance(100);
+    fg.d3Force("center")?.strength(0.05);
+    fg.d3ReheatSimulation();
+  }, [graphData]);
 
   // Highlight sets
   const highlightNodeIds = useMemo(() => {
@@ -427,6 +439,7 @@ export default function ConstellationView({
       {/* Force graph canvas */}
       <div ref={containerRef} className="flex-1 bg-gray-950 relative overflow-hidden">
         <ForceGraph2D
+          ref={fgRef}
           width={dimensions.width - (panelOpen ? 340 : 0)}
           height={dimensions.height}
           graphData={graphData}
@@ -448,6 +461,11 @@ export default function ConstellationView({
             const glowBlur = GLOW_STRENGTH[n.confidence] ?? 10;
             const alpha = dimmed ? 0.15 : (GLOW_ALPHA[n.confidence] ?? 0.5);
             const fontSize = Math.max(10 / globalScale, 1.5);
+
+            // Validate coordinates and size are finite before drawing
+            if (!isFinite(n.x) || !isFinite(n.y) || !isFinite(size)) {
+              return; // Skip rendering this node if coordinates are invalid
+            }
 
             // Draw starfield behind (only once per render cycle at this node)
             // (Starfield is drawn via CSS/canvas bg)

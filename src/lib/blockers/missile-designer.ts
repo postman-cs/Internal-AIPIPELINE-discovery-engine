@@ -35,7 +35,21 @@ Your missile design must be:
 You are NOT being asked to solve all problems. You are designing ONE precision strike
 against ONE specific blocker. Be surgical.
 
-Respond with valid JSON matching the required schema.`;
+OUTPUT: Return a FLAT JSON object (NO nesting under wrapper keys) with exactly these top-level fields:
+{
+  "name": "string — short name for this missile",
+  "strategy": "string — overall approach",
+  "targetAudience": "string — who to target",
+  "talkingPoints": [{ "point": "...", "evidence": "...", "rebuttal": "..." }],
+  "actionSteps": [{ "order": 1, "action": "...", "owner": "...", "deliverable": "...", "timeline": "..." }],
+  "deliverables": [{ "type": "...", "description": "...", "effort": "..." }],
+  "estimatedEffort": "string",
+  "successCriteria": "string",
+  "fallbackPlan": "string",
+  "probabilityOfSuccess": "high|medium|low"
+}
+
+ALL fields must be top-level keys. Do NOT nest them under wrapper objects like "missileDesign".`;
 
 /**
  * Generate an AI-designed missile for a specific blocker.

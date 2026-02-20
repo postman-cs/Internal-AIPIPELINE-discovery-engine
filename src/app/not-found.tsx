@@ -25,9 +25,9 @@ export default function NotFound() {
             href="/dashboard"
             className="text-sm px-5 py-2.5 rounded-lg font-medium transition-all"
             style={{
-              background: "linear-gradient(135deg, #ff6c37, #e5552a)",
+              background: "linear-gradient(135deg, #22c55e, #16a34a)",
               color: "white",
-              boxShadow: "0 0 20px rgba(255, 108, 55, 0.2)",
+              boxShadow: "0 0 20px rgba(34, 197, 94, 0.2)",
             }}
           >
             Go to Dashboard

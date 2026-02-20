@@ -261,7 +261,7 @@ export function DiscoveryForm({ projectId, defaults }: { projectId: string; defa
           {result?.success && (
             <p className="text-sm" style={{ color: "var(--accent-green)" }}>
               Discovery Brief v{result.version} generated!{" "}
-              <a href={`/projects/${projectId}/discovery/brief`} style={{ color: "var(--accent-orange)" }}>View Brief &rarr;</a>
+              <a href={`/projects/${projectId}/discovery/brief`} style={{ color: "var(--accent-green)" }}>View Brief &rarr;</a>
             </p>
           )}
           {Object.keys(errors).length > 0 && <p className="text-sm" style={{ color: "var(--accent-red)" }}>Please fix form errors before saving.</p>}

@@ -63,8 +63,8 @@ export function AIPipelinePanel({ projectId, evidenceStats, hasArtifact, latestV
       setIngestMsg({ type: "error", text: "Content is required" });
       return;
     }
+    setIngestMsg(null);
     startTransition(async () => {
-      setIngestMsg(null);
       const result = await ingestDiscoveryDocument(
         projectId,
         ingestSource,
@@ -131,9 +131,9 @@ export function AIPipelinePanel({ projectId, evidenceStats, hasArtifact, latestV
 
   // --- Pipeline ---
   const handleRunPipeline = () => {
+    setPipelineMsg({ type: "running", text: "Running 5-agent pipeline... This may take 30-60 seconds." });
+    toast.info("Pipeline started", "Running 5 AI agents...");
     startTransition(async () => {
-      setPipelineMsg({ type: "running", text: "Running 5-agent pipeline... This may take 30-60 seconds." });
-      toast.info("Pipeline started", "Running 5 AI agents...");
       const result = await runAIDiscoveryPipeline(projectId);
       if (result.error) {
         setPipelineMsg({ type: "error", text: result.error });
@@ -267,9 +267,9 @@ export function AIPipelinePanel({ projectId, evidenceStats, hasArtifact, latestV
           </div>
         </div>
 
-        {/* AI Pipeline Panel */}
+        {/* CortexLab Panel */}
         <div className="card">
-          <h2 className="text-lg font-semibold mb-1" style={{ color: "var(--foreground)" }}>2. Run AI Pipeline</h2>
+          <h2 className="text-lg font-semibold mb-1" style={{ color: "var(--foreground)" }}>2. Run CortexLab</h2>
           <p className="text-xs mb-4" style={{ color: "var(--foreground-dim)" }}>
             Run the 5-agent discovery pipeline to generate an evidence-cited Discovery Brief.
           </p>
@@ -303,7 +303,7 @@ export function AIPipelinePanel({ projectId, evidenceStats, hasArtifact, latestV
             >
               {pipelineMsg.text}
               {pipelineMsg.type === "success" && (
-                <a href={`/projects/${projectId}/discovery/brief`} className="block mt-1 font-medium" style={{ color: "var(--accent-orange)" }}>
+                <a href={`/projects/${projectId}/discovery/brief`} className="block mt-1 font-medium" style={{ color: "var(--accent-green)" }}>
                   View Brief →
                 </a>
               )}
@@ -315,7 +315,7 @@ export function AIPipelinePanel({ projectId, evidenceStats, hasArtifact, latestV
             disabled={isPending || evidenceStats.chunkCount === 0}
             className={`w-full text-sm font-medium py-3 px-4 rounded-lg transition-all duration-200 disabled:opacity-50 ${evidenceStats.chunkCount === 0 ? "cursor-not-allowed" : ""}`}
             style={{
-              background: evidenceStats.chunkCount === 0 ? "rgba(255,255,255,0.04)" : "linear-gradient(135deg, #ff6c37, #e5552a)",
+              background: evidenceStats.chunkCount === 0 ? "rgba(255,255,255,0.04)" : "linear-gradient(135deg, #22c55e, #16a34a)",
               color: evidenceStats.chunkCount === 0 ? "var(--foreground-dim)" : "white",
               boxShadow: evidenceStats.chunkCount > 0 ? "var(--glow-orange)" : "none",
             }}

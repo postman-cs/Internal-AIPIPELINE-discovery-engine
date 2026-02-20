@@ -11,6 +11,7 @@ const TABS = [
   { href: "/cicd", label: "CI/CD Playbook", icon: "cicd", shortLabel: "CI/CD" },
   { href: "/blockers", label: "Blockers", icon: "blockers", shortLabel: "Blockers" },
   { href: "/updates", label: "Cascade Updates", icon: "updates", shortLabel: "Updates" },
+  { href: "/execution", label: "Execution", icon: "execution", shortLabel: "Execute" },
 ];
 
 function TabIcon({ icon, active }: { icon: string; active: boolean }) {
@@ -31,6 +32,8 @@ function TabIcon({ icon, active }: { icon: string; active: boolean }) {
       return <svg className={cn} fill="none" viewBox="0 0 24 24" stroke={color} strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" /></svg>;
     case "updates":
       return <svg className={cn} fill="none" viewBox="0 0 24 24" stroke={color} strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" /></svg>;
+    case "execution":
+      return <svg className={cn} fill="none" viewBox="0 0 24 24" stroke={color} strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" /></svg>;
     default:
       return null;
   }
@@ -49,16 +52,14 @@ export function ProjectSubNav({ projectId }: { projectId: string }) {
         backdropFilter: "blur(12px)",
       }}
     >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Process flow stepper */}
-        <div className="flex items-center gap-0 overflow-x-auto py-1">
+      <div className="max-w-7xl mx-auto px-2 sm:px-4">
+        <div className="flex items-center py-1">
           {TABS.map((tab, idx) => {
             const fullHref = `${basePath}${tab.href}`;
             const isActive = tab.href === ""
               ? pathname === basePath
               : pathname.startsWith(fullHref);
 
-            // Determine if this step is "completed" (rough heuristic: before active)
             const activeIndex = TABS.findIndex((t) => {
               const fp = `${basePath}${t.href}`;
               return t.href === "" ? pathname === basePath : pathname.startsWith(fp);
@@ -67,17 +68,16 @@ export function ProjectSubNav({ projectId }: { projectId: string }) {
             const isLast = idx === TABS.length - 1;
 
             return (
-              <div key={tab.href} className="flex items-center shrink-0">
+              <div key={tab.href} className="flex items-center min-w-0">
                 <Link
                   href={fullHref}
-                  className="flex items-center gap-2 px-3 py-2.5 rounded-lg transition-all duration-200 group relative"
+                  className="flex items-center gap-1.5 px-1.5 sm:px-2 py-2 rounded-lg transition-all duration-200 relative min-w-0"
                   style={{
                     background: isActive ? "rgba(6, 214, 214, 0.06)" : "transparent",
                   }}
                 >
-                  {/* Step indicator */}
                   <div
-                    className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 transition-all duration-200"
+                    className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0 transition-all duration-200"
                     style={{
                       background: isActive
                         ? "rgba(6, 214, 214, 0.15)"
@@ -97,7 +97,7 @@ export function ProjectSubNav({ projectId }: { projectId: string }) {
                     }}
                   >
                     {isCompleted ? (
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                       </svg>
                     ) : (
@@ -105,33 +105,26 @@ export function ProjectSubNav({ projectId }: { projectId: string }) {
                     )}
                   </div>
 
-                  {/* Label + icon */}
-                  <div className="flex items-center gap-1.5">
-                    <TabIcon icon={tab.icon} active={isActive} />
-                    <span
-                      className="text-xs font-medium whitespace-nowrap"
-                      style={{
-                        color: isActive ? "var(--accent-cyan)" : isCompleted ? "var(--accent-green)" : "var(--foreground-muted)",
-                      }}
-                    >
-                      <span className="hidden sm:inline">{tab.label}</span>
-                      <span className="sm:hidden">{tab.shortLabel}</span>
-                    </span>
-                  </div>
+                  <span
+                    className="text-[11px] font-medium whitespace-nowrap truncate"
+                    style={{
+                      color: isActive ? "var(--accent-cyan)" : isCompleted ? "var(--accent-green)" : "var(--foreground-muted)",
+                    }}
+                  >
+                    {tab.shortLabel}
+                  </span>
 
-                  {/* Active indicator line */}
                   {isActive && (
                     <div
-                      className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full"
+                      className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
                       style={{ background: "var(--accent-cyan)" }}
                     />
                   )}
                 </Link>
 
-                {/* Connector line between steps */}
                 {!isLast && (
                   <div
-                    className="w-6 h-px shrink-0 mx-0.5"
+                    className="w-3 h-px shrink-0"
                     style={{
                       background: isCompleted
                         ? "var(--accent-green)"

@@ -47,7 +47,25 @@ Account for political dynamics, organizational inertia, and human psychology.
 CRITICAL: Include a FAILURE CONTINGENCY — what happens if even the nuke doesn't work.
 An SE must never be left without options.
 
-Respond with valid JSON matching the required schema.`;
+OUTPUT: Return a FLAT JSON object (NO nesting under wrapper keys) with exactly these top-level fields:
+{
+  "name": "string — short name for this nuke strategy",
+  "rationale": "string — why the nuclear option is needed",
+  "strategy": "string — high-level strategy description",
+  "escalationChain": [{ "order": 1, "person": "...", "role": "...", "approach": "...", "keyMessage": "..." }],
+  "collateralDamage": [{ "area": "...", "impact": "...", "mitigation": "..." }],
+  "riskAssessment": "string — overall risk analysis",
+  "pointOfNoReturn": "string — after which step is this irreversible",
+  "phases": [{ "order": 1, "name": "...", "actions": ["..."], "duration": "...", "successGate": "..." }],
+  "resources": [{ "type": "person|budget|tool|executive_time", "description": "...", "availability": "..." }],
+  "timeline": "string — overall timeline estimate",
+  "bypassStrategy": "string — alternative path that makes the blocker irrelevant",
+  "bypassTradeoffs": "string — what you sacrifice with the bypass",
+  "successCriteria": "string — how to measure if the nuke worked",
+  "failureContingency": "string — what to do if even the nuke fails"
+}
+
+ALL fields must be top-level keys. Do NOT nest them under wrapper objects like "nukeStrategy".`;
 
 /**
  * Generate an AI-designed nuke strategy for a specific blocker.

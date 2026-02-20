@@ -4,6 +4,9 @@
  * Normalizes raw source data and persists to SourceDocument.
  * Idempotent: skips documents with matching contentHash.
  * After persistence, enqueues chunk + embed job.
+ *
+ * For GMAIL source with a connected Google account, fetches real threads
+ * via the Gmail API instead of processing IngestItems.
  */
 
 import type { Task } from "graphile-worker";
@@ -16,16 +19,38 @@ interface Payload {
 }
 
 const task: Task = async (payload, helpers) => {
-  const { projectId, source } = payload as Payload;
+  const { projectId, userId, source } = payload as Payload;
   const { logger, addJob } = helpers;
 
   logger.info(`Normalizing source ${source} for project ${projectId}`);
 
-  // This is a stub that would connect to actual source APIs.
-  // In production, this would fetch from Gmail, Slack, GitHub, etc.
-  // For now, it checks for unconsumed IngestItems and processes them.
-
   const { prisma } = await import("@/lib/prisma");
+
+  // For GMAIL, attempt real fetch if the user has a refresh token
+  if (source === "GMAIL") {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { googleRefreshToken: true },
+    });
+
+    if (user?.googleRefreshToken) {
+      const { ingestGmailForProject } = await import("@/lib/gmail/ingest");
+      const result = await ingestGmailForProject(projectId, userId);
+      logger.info(
+        `Gmail ingest: ${result.documentsIngested} docs, ${result.attachmentsProcessed} attachments, ${result.skipped} skipped, ${result.errors.length} errors`,
+      );
+      if (result.documentsIngested > 0 || result.attachmentsProcessed > 0) {
+        await addJob(
+          "snapshot.createEvidenceSnapshot",
+          { projectId },
+          { maxAttempts: 2, queueName: `snapshot-${projectId}` },
+        );
+      }
+      return;
+    }
+  }
+
+  // Fallback: process IngestItems (mock or manually uploaded data)
   const { ingestDocument } = await import("@/lib/ai/ingest");
 
   const items = await prisma.ingestItem.findMany({
@@ -33,7 +58,7 @@ const task: Task = async (payload, helpers) => {
       source,
       consumedAt: null,
       rawText: { not: null },
-      ingestRun: { userId: (payload as Payload).userId },
+      ingestRun: { userId },
     },
     take: 50,
     orderBy: { timestamp: "desc" },
@@ -59,7 +84,6 @@ const task: Task = async (payload, helpers) => {
       processed++;
     }
 
-    // Mark consumed
     await prisma.ingestItem.update({
       where: { id: item.id },
       data: { consumedAt: new Date() },
@@ -68,12 +92,12 @@ const task: Task = async (payload, helpers) => {
 
   logger.info(`Processed: ${processed}, skipped (dedup): ${skipped}`);
 
-  // If any new docs were processed, enqueue snapshot creation
   if (processed > 0) {
-    await addJob("snapshot.createEvidenceSnapshot", { projectId }, {
-      maxAttempts: 2,
-      queueName: `snapshot-${projectId}`,
-    });
+    await addJob(
+      "snapshot.createEvidenceSnapshot",
+      { projectId },
+      { maxAttempts: 2, queueName: `snapshot-${projectId}` },
+    );
   }
 };
 

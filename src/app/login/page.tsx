@@ -36,15 +36,15 @@ export default function LoginPage() {
             <div
               className="w-14 h-14 rounded-xl flex items-center justify-center mx-auto mb-5"
               style={{
-                background: "linear-gradient(135deg, #ff6c37, #e5552a)",
-                boxShadow: "0 0 30px rgba(255, 108, 55, 0.25)",
+                background: "linear-gradient(135deg, #22c55e, #16a34a)",
+                boxShadow: "0 0 30px rgba(34, 197, 94, 0.25)",
               }}
             >
-              <span className="text-white text-xl font-bold">AI</span>
+              <span className="text-white text-xl font-bold">CL</span>
             </div>
           </Link>
           <h1 className="text-xl font-semibold" style={{ color: "var(--foreground)" }}>
-            Sign in to AI Pipeline
+            Sign in to CortexLab
           </h1>
           <p className="text-sm mt-1" style={{ color: "var(--foreground-dim)" }}>
             Enterprise CI/CD Adoption Intelligence
