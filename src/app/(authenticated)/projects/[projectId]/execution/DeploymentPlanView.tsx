@@ -71,11 +71,11 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
   return (
     <div className="space-y-6">
       {/* Stats bar */}
-      <div className="grid grid-cols-4 gap-3">
-        <StatPill label="Deploy Steps" value={steps.length} color="#22c55e" />
-        <StatPill label="CI/CD Stages" value={stages.length} color="#8b5cf6" />
-        <StatPill label="Env Gates" value={gates.length} color="#06d6d6" />
-        <StatPill label="Go-Live Checks" value={goLive.length} color="#10b981" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCard label="Deploy Steps" value={steps.length} color="#22c55e" />
+        <StatCard label="CI/CD Stages" value={stages.length} color="#8b5cf6" />
+        <StatCard label="Env Gates" value={gates.length} color="#06d6d6" />
+        <StatCard label="Go-Live Checks" value={goLive.length} color="#10b981" />
       </div>
 
       {timeline && (
@@ -105,11 +105,21 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
         <section>
           <SectionHeader icon={<RocketIcon />} title="Deployment Pipeline" color="#22c55e" />
           <div className="relative ml-4 mt-3">
-            {/* Vertical line */}
             <div
               className="absolute left-3 top-0 bottom-0 w-px"
               style={{ background: "linear-gradient(to bottom, rgba(34,197,94,0.4), rgba(34,197,94,0.05))" }}
             />
+            {expandedStep !== null && (
+              <div
+                className="absolute left-[11px] w-[3px] rounded-full transition-all duration-500"
+                style={{
+                  top: `${expandedStep * 56}px`,
+                  height: "56px",
+                  background: "rgba(34,197,94,0.25)",
+                  boxShadow: "0 0 8px rgba(34,197,94,0.3)",
+                }}
+              />
+            )}
             <div className="space-y-1">
               {steps.map((step, i) => {
                 const isExpanded = expandedStep === i;
@@ -239,13 +249,22 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
       {stages.length > 0 && (
         <section>
           <SectionHeader icon={<PipelineIcon />} title="CI/CD Pipeline Stages" color="#8b5cf6" />
-          <div className="mt-3 overflow-x-auto pb-2">
-            <div className="flex items-stretch gap-2 min-w-max">
+          <div className="mt-3 relative">
+            <div
+              className="absolute left-0 top-0 bottom-0 w-6 z-10 pointer-events-none"
+              style={{ background: "linear-gradient(to right, var(--background), transparent)" }}
+            />
+            <div
+              className="absolute right-0 top-0 bottom-0 w-6 z-10 pointer-events-none"
+              style={{ background: "linear-gradient(to left, var(--background), transparent)" }}
+            />
+            <div className="overflow-x-auto pb-2 px-1">
+            <div className="flex items-stretch gap-3 min-w-max">
               {stages.map((stage, i) => (
-                <div key={i} className="flex items-stretch gap-2">
+                <div key={i} className="flex items-stretch gap-3">
                   <button
                     onClick={() => setShowSnippet(showSnippet === i ? null : i)}
-                    className="rounded-lg p-3 transition-all duration-200 text-left min-w-[180px] relative group"
+                    className="rounded-xl p-4 transition-all duration-200 text-left min-w-[200px] relative group"
                     style={{
                       background: showSnippet === i ? "rgba(139,92,246,0.06)" : "var(--surface)",
                       border: showSnippet === i
@@ -295,6 +314,7 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
                 </div>
               ))}
             </div>
+            </div>
           </div>
           {showSnippet !== null && stages[showSnippet]?.configSnippet && (
             <div
@@ -308,9 +328,12 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
                 <span className="text-[10px] font-medium" style={{ color: "#a78bfa" }}>
                   {stages[showSnippet].platformLabel} — {stages[showSnippet].stageName}
                 </span>
-                <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>
-                  {stages[showSnippet].configLanguage}
-                </span>
+                <div className="flex items-center gap-2">
+                  <CopyButton text={stages[showSnippet].configSnippet!} />
+                  <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>
+                    {stages[showSnippet].configLanguage}
+                  </span>
+                </div>
               </div>
               <pre
                 className="p-3 text-[11px] leading-relaxed overflow-x-auto"
@@ -334,16 +357,16 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
                 className="rounded-lg p-3 flex items-center gap-4"
                 style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
               >
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-3 shrink-0">
                   <EnvBadge env={gate.fromEnv ?? "?"} />
-                  <svg width="28" height="12" viewBox="0 0 28 12" className="shrink-0">
+                  <svg width="36" height="14" viewBox="0 0 36 14" className="shrink-0">
                     <defs>
                       <linearGradient id={`gateGrad${i}`} x1="0" y1="0" x2="1" y2="0">
-                        <stop offset="0%" stopColor="rgba(6,214,214,0.4)" />
-                        <stop offset="100%" stopColor="rgba(6,214,214,0.8)" />
+                        <stop offset="0%" stopColor="rgba(6,214,214,0.3)" />
+                        <stop offset="100%" stopColor="rgba(6,214,214,0.9)" />
                       </linearGradient>
                     </defs>
-                    <path d="M0 6h22M20 2l4 4-4 4" stroke={`url(#gateGrad${i})`} strokeWidth="1.5" fill="none" />
+                    <path d="M0 7h28M26 3l5 4-5 4" stroke={`url(#gateGrad${i})`} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                   <EnvBadge env={gate.toEnv ?? "?"} />
                 </div>
@@ -382,7 +405,7 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
       {/* Go-Live Criteria */}
       {goLive.length > 0 && (
         <section>
-          <SectionHeader icon={<ChecklistIcon />} title="Go-Live Criteria" color="#10b981" />
+          <SectionHeader icon={<ChecklistIcon />} title="Go-Live Criteria" color="#10b981" count={`${goLive.length} of ${goLive.length}`} />
           <div className="mt-3 grid grid-cols-2 gap-2">
             {goLive.map((criterion, i) => (
               <div
@@ -406,61 +429,63 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
       )}
 
       {/* Training & Communication */}
-      <div className="grid grid-cols-2 gap-4">
-        {training.length > 0 && (
-          <section>
-            <SectionHeader icon={<UsersIcon />} title="Training Requirements" color="#3b82f6" />
-            <div className="mt-3 space-y-2">
-              {training.map((t, i) => (
-                <div
-                  key={i}
-                  className="rounded-lg px-3 py-2"
-                  style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-                >
-                  <p className="text-xs font-medium" style={{ color: "var(--foreground)" }}>{t.topic || "Training"}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    {t.audience && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(59,130,246,0.08)", color: "#60a5fa" }}>
-                        {t.audience}
-                      </span>
-                    )}
-                    {t.format && (
-                      <span className="text-[10px]" style={{ color: "var(--foreground-dim)" }}>
-                        {t.format}
-                      </span>
-                    )}
+      {(training.length > 0 || comms.length > 0) && (
+        <div className={`grid gap-4 ${training.length > 0 && comms.length > 0 ? "grid-cols-2" : "grid-cols-1"}`}>
+          {training.length > 0 && (
+            <section>
+              <SectionHeader icon={<UsersIcon />} title="Training Requirements" color="#3b82f6" />
+              <div className="mt-3 space-y-2">
+                {training.map((t, i) => (
+                  <div
+                    key={i}
+                    className="rounded-lg px-3 py-2"
+                    style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+                  >
+                    <p className="text-xs font-medium" style={{ color: "var(--foreground)" }}>{t.topic || "Training"}</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      {t.audience && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(59,130,246,0.08)", color: "#60a5fa" }}>
+                          {t.audience}
+                        </span>
+                      )}
+                      {t.format && (
+                        <span className="text-[10px]" style={{ color: "var(--foreground-dim)" }}>
+                          {t.format}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
+                ))}
+              </div>
+            </section>
+          )}
 
-        {comms.length > 0 && (
-          <section>
-            <SectionHeader icon={<MessageIcon />} title="Communication Plan" color="#f59e0b" />
-            <div className="mt-3 space-y-2">
-              {comms.map((c, i) => (
-                <div
-                  key={i}
-                  className="rounded-lg px-3 py-2"
-                  style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-                >
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-medium" style={{ color: "var(--foreground)" }}>{c.stakeholder || "Stakeholder"}</p>
-                    {c.timing && (
-                      <span className="text-[10px]" style={{ color: "var(--foreground-dim)" }}>{c.timing}</span>
+          {comms.length > 0 && (
+            <section>
+              <SectionHeader icon={<MessageIcon />} title="Communication Plan" color="#f59e0b" />
+              <div className="mt-3 space-y-2">
+                {comms.map((c, i) => (
+                  <div
+                    key={i}
+                    className="rounded-lg px-3 py-2"
+                    style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium" style={{ color: "var(--foreground)" }}>{c.stakeholder || "Stakeholder"}</p>
+                      {c.timing && (
+                        <span className="text-[10px]" style={{ color: "var(--foreground-dim)" }}>{c.timing}</span>
+                      )}
+                    </div>
+                    {c.message && (
+                      <p className="text-[11px] mt-1 line-clamp-2" style={{ color: "var(--foreground-muted)" }}>{c.message}</p>
                     )}
                   </div>
-                  {c.message && (
-                    <p className="text-[11px] mt-1 line-clamp-2" style={{ color: "var(--foreground-muted)" }}>{c.message}</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-      </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      )}
 
       {/* Change Management Notes */}
       {changeNotes.length > 0 && (
@@ -484,25 +509,58 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function StatPill({ label, value, color }: { label: string; value: number; color: string }) {
+function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div
-      className="rounded-lg px-3 py-2 text-center"
-      style={{ background: `${color}08`, border: `1px solid ${color}18` }}
+      className="rounded-xl px-4 py-3"
+      style={{ background: `${color}08`, border: `1px solid ${color}15` }}
     >
-      <p className="text-lg font-bold" style={{ color }}>{value}</p>
-      <p className="text-[10px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>{label}</p>
+      <p className="text-xl font-bold" style={{ color }}>{value}</p>
+      <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: "var(--foreground-dim)" }}>{label}</p>
     </div>
   );
 }
 
-function SectionHeader({ icon, title, color }: { icon: React.ReactNode; title: string; color: string }) {
+function SectionHeader({ icon, title, color, count }: { icon: React.ReactNode; title: string; color: string; count?: string }) {
   return (
-    <div className="flex items-center gap-2">
-      <div style={{ color }}>{icon}</div>
+    <div className="flex items-center gap-2.5">
+      <div
+        className="w-7 h-7 rounded-lg flex items-center justify-center"
+        style={{ background: `${color}12`, color }}
+      >
+        {icon}
+      </div>
       <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color }}>{title}</h3>
+      {count && (
+        <span className="text-[10px] font-medium" style={{ color: "var(--foreground-dim)" }}>
+          {count}
+        </span>
+      )}
       <div className="flex-1 h-px" style={{ background: `linear-gradient(to right, ${color}30, transparent)` }} />
     </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button
+      onClick={handleCopy}
+      className="text-[9px] px-2 py-0.5 rounded transition-all duration-200"
+      style={{
+        background: copied ? "rgba(34,197,94,0.15)" : "rgba(139,92,246,0.1)",
+        color: copied ? "#34d399" : "#a78bfa",
+        border: `1px solid ${copied ? "rgba(34,197,94,0.2)" : "rgba(139,92,246,0.15)"}`,
+      }}
+    >
+      {copied ? "Copied!" : "Copy"}
+    </button>
   );
 }
 

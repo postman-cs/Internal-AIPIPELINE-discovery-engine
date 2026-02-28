@@ -554,7 +554,7 @@ model Assumption {
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
-  @@index([projectId, phase])
+  @@unique([projectId, phase, category])
   @@index([projectId, status])
   @@index([recomputeJobId])
 }

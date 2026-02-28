@@ -74,12 +74,12 @@ export function MonitoringDashboardView({ data }: { data: MonitoringData }) {
   return (
     <div className="space-y-6">
       {/* Stats overview */}
-      <div className="grid grid-cols-5 gap-3">
-        <MetricCard label="Monitors" value={monitors.length} color="#06d6d6" icon={<PulseIcon />} />
-        <MetricCard label="Postman Monitors" value={postmanMonitors.length} color="#22c55e" icon={<PostmanIcon />} />
-        <MetricCard label="SLOs" value={slos.length} color="#8b5cf6" icon={<TargetIcon />} />
-        <MetricCard label="Alert Rules" value={alerts.length} color="#ef4444" icon={<BellIcon />} />
-        <MetricCard label="Renewal Signals" value={signals.length} color="#10b981" icon={<SignalIcon />} />
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+        <StatCard label="Monitors" value={monitors.length} color="#06d6d6" />
+        <StatCard label="Postman Monitors" value={postmanMonitors.length} color="#22c55e" />
+        <StatCard label="SLOs" value={slos.length} color="#8b5cf6" />
+        <StatCard label="Alert Rules" value={alerts.length} color="#ef4444" />
+        <StatCard label="Renewal Signals" value={signals.length} color="#10b981" />
       </div>
 
       {/* Monitors Grid */}
@@ -180,8 +180,12 @@ export function MonitoringDashboardView({ data }: { data: MonitoringData }) {
                 style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
               >
                 <div
-                  className="absolute top-0 left-0 right-0 h-px"
-                  style={{ background: "linear-gradient(to right, rgba(34,197,94,0.4), transparent)" }}
+                  className="absolute top-0 left-0 right-0 h-[2px]"
+                  style={{ background: "linear-gradient(to right, rgba(34,197,94,0.6), rgba(34,197,94,0.2), transparent)" }}
+                />
+                <div
+                  className="absolute top-0 left-0 right-0 h-8 pointer-events-none"
+                  style={{ background: "linear-gradient(to bottom, rgba(34,197,94,0.03), transparent)" }}
                 />
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
@@ -254,13 +258,12 @@ export function MonitoringDashboardView({ data }: { data: MonitoringData }) {
                   )}
                 </div>
                 <div className="flex items-center gap-3">
-                  {/* SLO gauge visualization */}
-                  <div className="relative w-12 h-12 shrink-0">
-                    <svg viewBox="0 0 36 36" className="w-12 h-12">
+                  <div className="relative w-14 h-14 shrink-0">
+                    <svg viewBox="0 0 36 36" className="w-14 h-14">
                       <path
                         d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                         fill="none"
-                        stroke="rgba(139,92,246,0.1)"
+                        stroke="rgba(139,92,246,0.08)"
                         strokeWidth="3"
                       />
                       <path
@@ -270,11 +273,11 @@ export function MonitoringDashboardView({ data }: { data: MonitoringData }) {
                         strokeWidth="3"
                         strokeDasharray={`${parseTargetPercent(slo.target ?? "")}, 100`}
                         strokeLinecap="round"
-                        style={{ filter: "drop-shadow(0 0 3px rgba(139,92,246,0.3))" }}
+                        style={{ filter: "drop-shadow(0 0 6px rgba(139,92,246,0.5))" }}
                       />
                     </svg>
                     <span
-                      className="absolute inset-0 flex items-center justify-center text-[9px] font-bold"
+                      className="absolute inset-0 flex items-center justify-center text-[10px] font-bold"
                       style={{ color: "#a78bfa" }}
                     >
                       {slo.target || "—"}
@@ -356,7 +359,7 @@ export function MonitoringDashboardView({ data }: { data: MonitoringData }) {
               <div
                 key={i}
                 className="rounded-lg p-3 flex flex-col"
-                style={{ background: "var(--surface)", border: "1px solid var(--border)", minHeight: 80 }}
+                style={{ background: "var(--surface)", border: "1px solid var(--border)", minHeight: 100 }}
               >
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[10px] font-medium" style={{ color: "var(--foreground)" }}>
@@ -366,12 +369,11 @@ export function MonitoringDashboardView({ data }: { data: MonitoringData }) {
                     {panel.visualizationType || "line"}
                   </span>
                 </div>
-                {/* Mini chart visualization */}
-                <div className="flex-1 flex items-end justify-center gap-0.5 opacity-50">
+                <div className="flex-1 flex items-end justify-center gap-0.5 opacity-80" style={{ minHeight: 40 }}>
                   <PanelViz type={panel.visualizationType ?? "line"} />
                 </div>
                 {panel.metricQuery && (
-                  <p className="text-[9px] mt-1 truncate" style={{ color: "var(--foreground-dim)" }}>
+                  <p className="text-[9px] mt-2 truncate" style={{ color: "var(--foreground-dim)" }}>
                     {panel.metricQuery}
                   </p>
                 )}
@@ -433,27 +435,33 @@ export function MonitoringDashboardView({ data }: { data: MonitoringData }) {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function MetricCard({ label, value, color, icon }: { label: string; value: number; color: string; icon: React.ReactNode }) {
-  if (value === 0) return <div className="rounded-lg p-3" style={{ background: "var(--surface)", border: "1px solid var(--border)", opacity: 0.4 }}>
-    <p className="text-lg font-bold" style={{ color: "var(--foreground-dim)" }}>0</p>
-    <p className="text-[9px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>{label}</p>
-  </div>;
+function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
+  if (value === 0) return (
+    <div className="rounded-xl px-4 py-3" style={{ background: "var(--surface)", border: "1px solid var(--border)", opacity: 0.4 }}>
+      <p className="text-xl font-bold" style={{ color: "var(--foreground-dim)" }}>0</p>
+      <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: "var(--foreground-dim)" }}>{label}</p>
+    </div>
+  );
   return (
     <div
-      className="rounded-lg p-3 relative overflow-hidden"
-      style={{ background: `${color}06`, border: `1px solid ${color}15` }}
+      className="rounded-xl px-4 py-3"
+      style={{ background: `${color}08`, border: `1px solid ${color}15` }}
     >
-      <div className="absolute top-0 right-0 opacity-10 -mr-1 -mt-1" style={{ color }}>{icon}</div>
       <p className="text-xl font-bold" style={{ color }}>{value}</p>
-      <p className="text-[9px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>{label}</p>
+      <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: "var(--foreground-dim)" }}>{label}</p>
     </div>
   );
 }
 
 function SectionHeader({ icon, title, color }: { icon: React.ReactNode; title: string; color: string }) {
   return (
-    <div className="flex items-center gap-2">
-      <div style={{ color }}>{icon}</div>
+    <div className="flex items-center gap-2.5">
+      <div
+        className="w-7 h-7 rounded-lg flex items-center justify-center"
+        style={{ background: `${color}12`, color }}
+      >
+        {icon}
+      </div>
       <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color }}>{title}</h3>
       <div className="flex-1 h-px" style={{ background: `linear-gradient(to right, ${color}30, transparent)` }} />
     </div>
@@ -477,37 +485,37 @@ function PanelViz({ type }: { type: string }) {
   if (type === "bar" || type === "histogram") {
     return (
       <>
-        {[40, 60, 35, 75, 55, 45, 70].map((h, i) => (
-          <div key={i} className="w-2 rounded-t" style={{ height: `${h}%`, background: "rgba(59,130,246,0.3)" }} />
+        {[40, 65, 35, 80, 55, 45, 72].map((h, i) => (
+          <div key={i} className="w-3 rounded-t" style={{ height: `${h}%`, background: `rgba(59,130,246,${0.35 + i * 0.05})` }} />
         ))}
       </>
     );
   }
   if (type === "gauge") {
     return (
-      <svg viewBox="0 0 36 20" className="w-10 h-6">
-        <path d="M4 18 A14 14 0 0 1 32 18" fill="none" stroke="rgba(59,130,246,0.15)" strokeWidth="3" />
-        <path d="M4 18 A14 14 0 0 1 26 6" fill="none" stroke="rgba(59,130,246,0.5)" strokeWidth="3" strokeLinecap="round" />
+      <svg viewBox="0 0 36 20" className="w-12 h-8">
+        <path d="M4 18 A14 14 0 0 1 32 18" fill="none" stroke="rgba(59,130,246,0.12)" strokeWidth="3" />
+        <path d="M4 18 A14 14 0 0 1 26 6" fill="none" stroke="rgba(59,130,246,0.6)" strokeWidth="3" strokeLinecap="round" style={{ filter: "drop-shadow(0 0 3px rgba(59,130,246,0.4))" }} />
       </svg>
     );
   }
-  // Default: line chart
   return (
-    <svg viewBox="0 0 60 24" className="w-full h-6">
-      <polyline
-        points="0,20 8,16 16,18 24,10 32,14 40,6 48,10 60,4"
-        fill="none" stroke="rgba(59,130,246,0.4)" strokeWidth="1.5"
-      />
-      <polyline
-        points="0,20 8,16 16,18 24,10 32,14 40,6 48,10 60,4"
-        fill="url(#lineGrad)" stroke="none"
-      />
+    <svg viewBox="0 0 60 30" className="w-full h-8">
       <defs>
         <linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="rgba(59,130,246,0.15)" />
+          <stop offset="0%" stopColor="rgba(59,130,246,0.2)" />
           <stop offset="100%" stopColor="transparent" />
         </linearGradient>
       </defs>
+      <polygon
+        points="0,26 8,20 16,22 24,12 32,16 40,8 48,12 60,5 60,26 0,26"
+        fill="url(#lineGrad)" stroke="none"
+      />
+      <polyline
+        points="0,26 8,20 16,22 24,12 32,16 40,8 48,12 60,5"
+        fill="none" stroke="rgba(59,130,246,0.6)" strokeWidth="1.5"
+        style={{ filter: "drop-shadow(0 0 2px rgba(59,130,246,0.3))" }}
+      />
     </svg>
   );
 }

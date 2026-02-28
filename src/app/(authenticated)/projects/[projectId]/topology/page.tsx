@@ -144,7 +144,7 @@ export default async function TopologyPage({
       )}
 
       {nodes.length > 0 ? (
-        <TopologyTabs nodes={nodes} edges={edges} projectId={projectId} />
+        <TopologyTabs nodes={nodes} edges={edges} />
       ) : (
         <div className="flex-1 flex items-center justify-center" style={{ background: "var(--background)" }}>
           <div className="text-center">

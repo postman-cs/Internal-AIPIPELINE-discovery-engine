@@ -12,7 +12,6 @@
 export type FeatureFlag =
   | "AI_PIPELINE"           // AI-powered discovery pipeline
   | "WEBHOOK_INGEST"        // External webhook ingest endpoint
-  | "STORY_MODE"            // Topology story mode tab
   | "COMMAND_PALETTE"       // Cmd+K command palette
   | "PROJECT_NOTES"         // Quick notes per project
   | "EXPORT_PROJECT"        // Export project data
@@ -41,7 +40,6 @@ export type FeatureFlag =
 const DEFAULTS: Record<FeatureFlag, boolean> = {
   AI_PIPELINE: true,
   WEBHOOK_INGEST: true,
-  STORY_MODE: true,
   COMMAND_PALETTE: true,
   PROJECT_NOTES: true,
   EXPORT_PROJECT: true,

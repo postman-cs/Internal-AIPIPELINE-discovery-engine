@@ -84,75 +84,130 @@ export async function persistPhaseAssumptions(
     count: assumptions.length,
   });
 
-  // Clean up stale PENDING and AUTO_VERIFIED assumptions from prior runs
-  // for this phase. Human-reviewed ones (VERIFIED, CORRECTED, REJECTED) are preserved.
+  // Clean up transient assumptions from prior runs for this phase.
+  // PENDING/AUTO_VERIFIED are stale (superseded by the new agent run).
+  // REJECTED are consumed (the human's feedback was recorded, and the AI
+  // should be free to generate a fresh claim for this category).
+  // Only VERIFIED and CORRECTED are preserved — they represent human-confirmed
+  // facts that constrain downstream phases.
   await prisma.assumption.deleteMany({
     where: {
       projectId,
       phase,
-      status: { in: ["PENDING", "AUTO_VERIFIED"] },
+      status: { in: ["PENDING", "AUTO_VERIFIED", "REJECTED"] },
     },
   });
 
-  // Check for existing verified assumptions in the same category.
-  // If a human already verified an assumption in a prior run,
-  // auto-verify matching assumptions (prevents re-asking known facts).
-  const existingVerified = await prisma.assumption.findMany({
-    where: {
-      projectId,
-      status: { in: ["VERIFIED", "CORRECTED"] },
-    },
-    select: { category: true, claim: true, humanResponse: true, status: true },
+  // Fetch ALL existing assumptions for this project (any phase) so we can
+  // deduplicate across phases and handle multiple verified claims per category.
+  const existingAll = await prisma.assumption.findMany({
+    where: { projectId },
+    select: { phase: true, category: true, claim: true, humanResponse: true, status: true },
   });
 
-  const verifiedClaims = new Map<string, { claim: string; response: string | null; status: AssumptionStatus }>();
-  for (const v of existingVerified) {
-    verifiedClaims.set(v.category, {
-      claim: v.claim,
-      response: v.humanResponse,
-      status: v.status,
-    });
+  // Build a Map<category, Array<...>> so we check ALL verified claims per
+  // category, not just the last one (fixes last-write-wins bug).
+  const verifiedByCategory = new Map<string, Array<{ claim: string; response: string | null; status: AssumptionStatus }>>();
+  for (const v of existingAll) {
+    if (v.status !== "VERIFIED" && v.status !== "CORRECTED") continue;
+    let arr = verifiedByCategory.get(v.category);
+    if (!arr) {
+      arr = [];
+      verifiedByCategory.set(v.category, arr);
+    }
+    arr.push({ claim: v.claim, response: v.humanResponse, status: v.status });
   }
+
+  // Build a set of existing (phase, category) pairs with active statuses
+  // to prevent re-creating semantically duplicate assumptions.
+  const activePhaseCategoryKeys = new Set<string>();
+  for (const a of existingAll) {
+    if (a.status === "VERIFIED" || a.status === "CORRECTED" || a.status === "PENDING") {
+      activePhaseCategoryKeys.add(`${a.phase}::${a.category}`);
+    }
+  }
+
+  // Track categories we've already inserted in this batch to avoid
+  // intra-batch duplicates (when the AI returns the same category twice).
+  const batchInsertedCategories = new Set<string>();
 
   const ids: string[] = [];
 
   for (const assumption of assumptions) {
-    // Check if this category was already verified in a prior run
-    const priorVerification = verifiedClaims.get(assumption.category);
+    const phaseCategoryKey = `${phase}::${assumption.category}`;
+
+    // Skip if this (phase, category) already has an active assumption
+    if (activePhaseCategoryKeys.has(phaseCategoryKey)) {
+      log.info("Skipping duplicate assumption — active record exists", {
+        category: assumption.category,
+        phase,
+      });
+      continue;
+    }
+
+    // Skip intra-batch duplicates
+    if (batchInsertedCategories.has(assumption.category)) {
+      log.info("Skipping intra-batch duplicate assumption", {
+        category: assumption.category,
+        phase,
+      });
+      continue;
+    }
+
+    // Check if any verified claim across any phase matches this category
+    const priorVerifications = verifiedByCategory.get(assumption.category) ?? [];
     let status: AssumptionStatus = "PENDING";
+    let matchedResponse: string | null = null;
 
-    if (priorVerification) {
-      // If the claim is substantially the same, auto-verify
+    for (const prior of priorVerifications) {
       const claimSimilar = normalizeForComparison(assumption.claim) ===
-        normalizeForComparison(priorVerification.claim);
-
+        normalizeForComparison(prior.claim);
       if (claimSimilar) {
         status = "AUTO_VERIFIED";
+        matchedResponse = prior.response;
         log.info("Auto-verified assumption from prior verification", {
           category: assumption.category,
           phase,
         });
+        break;
       }
     }
 
-    const record = await prisma.assumption.create({
-      data: {
-        projectId,
-        phase,
-        category: assumption.category,
-        claim: assumption.claim,
-        reasoning: assumption.reasoning,
-        confidence: assumption.confidence,
-        evidenceIds: assumption.evidenceIds as Prisma.InputJsonValue,
-        impact: assumption.impact,
-        status,
-        humanResponse: status === "AUTO_VERIFIED" ? priorVerification?.response ?? null : null,
-        blocksPhases: assumption.blocksPhases as Prisma.InputJsonValue,
-        recomputeJobId: recomputeJobId ?? null,
-      },
-    });
+    try {
+      const record = await prisma.assumption.create({
+        data: {
+          projectId,
+          phase,
+          category: assumption.category,
+          claim: assumption.claim,
+          reasoning: assumption.reasoning,
+          confidence: assumption.confidence,
+          evidenceIds: assumption.evidenceIds as Prisma.InputJsonValue,
+          impact: assumption.impact,
+          status,
+          humanResponse: status === "AUTO_VERIFIED" ? matchedResponse : null,
+          blocksPhases: assumption.blocksPhases as Prisma.InputJsonValue,
+          recomputeJobId: recomputeJobId ?? null,
+        },
+      });
 
-    ids.push(record.id);
+      ids.push(record.id);
+      batchInsertedCategories.add(assumption.category);
+      activePhaseCategoryKeys.add(phaseCategoryKey);
+    } catch (err) {
+      // Unique constraint violation — another concurrent process already
+      // created this (projectId, phase, category). Safe to skip.
+      const isUniqueViolation =
+        err instanceof Error && err.message.includes("Unique constraint");
+      if (isUniqueViolation) {
+        log.info("Skipping assumption — unique constraint (concurrent insert)", {
+          category: assumption.category,
+          phase,
+        });
+      } else {
+        throw err;
+      }
+    }
   }
 
   return ids;

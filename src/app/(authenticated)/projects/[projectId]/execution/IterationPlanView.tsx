@@ -71,7 +71,7 @@ export function IterationPlanView({ data }: { data: IterationData }) {
   return (
     <div className="space-y-6">
       {/* Summary stats */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard label="Backlog Items" value={items.length} color="#34d399" />
         <StatCard label="Critical Path" value={criticalPath.length} color="#ef4444" />
         <StatCard label="Quick Wins" value={quickWins.length} color="#10b981" />
@@ -104,7 +104,7 @@ export function IterationPlanView({ data }: { data: IterationData }) {
                 Drift Analysis
               </h3>
               <span
-                className="text-[9px] px-2 py-0.5 rounded-full font-bold animate-pulse"
+                className="text-[9px] px-2 py-0.5 rounded-full font-bold animate-pulse-glow"
                 style={{ background: "rgba(245,158,11,0.15)", color: "#fbbf24" }}
               >
                 {drift.driftAreas!.length} AREA{drift.driftAreas!.length > 1 ? "S" : ""} DETECTED
@@ -118,7 +118,7 @@ export function IterationPlanView({ data }: { data: IterationData }) {
                   <div
                     key={i}
                     className="rounded-md px-3 py-2 flex items-start gap-2"
-                    style={{ background: "rgba(0,0,0,0.2)", border: "1px solid var(--border)" }}
+                    style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
                   >
                     <div
                       className="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5"
@@ -240,6 +240,7 @@ export function IterationPlanView({ data }: { data: IterationData }) {
                   style={{
                     background: isExpanded ? "rgba(52,211,153,0.02)" : "var(--surface)",
                     border: isExpanded ? "1px solid rgba(52,211,153,0.15)" : "1px solid var(--border)",
+                    borderLeft: `3px solid ${pColor}`,
                   }}
                 >
                   <button
@@ -331,23 +332,32 @@ export function IterationPlanView({ data }: { data: IterationData }) {
       {nextCycle && (
         <section>
           <div
-            className="rounded-lg p-4 relative overflow-hidden"
+            className="rounded-xl p-5 relative overflow-hidden"
             style={{
               background: "rgba(52,211,153,0.03)",
-              border: "1px solid rgba(52,211,153,0.12)",
+              border: "1px solid rgba(52,211,153,0.15)",
             }}
           >
+            <div
+              className="absolute top-0 left-0 right-0 h-[2px]"
+              style={{ background: "linear-gradient(to right, rgba(52,211,153,0.5), rgba(52,211,153,0.15), transparent)" }}
+            />
             <div
               className="absolute bottom-0 left-0 right-0 h-px"
               style={{ background: "linear-gradient(to right, rgba(52,211,153,0.4), transparent)" }}
             />
-            <div className="flex items-center gap-2 mb-2">
-              <CycleIcon />
-              <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#34d399" }}>
+            <div className="flex items-center gap-3 mb-3">
+              <div
+                className="w-9 h-9 rounded-xl flex items-center justify-center"
+                style={{ background: "rgba(52,211,153,0.12)" }}
+              >
+                <CycleIcon />
+              </div>
+              <h3 className="text-sm font-bold uppercase tracking-wider" style={{ color: "#34d399" }}>
                 Next Cycle Recommendation
               </h3>
             </div>
-            <p className="text-sm leading-relaxed" style={{ color: "var(--foreground-muted)" }}>
+            <p className="text-sm leading-relaxed pl-12" style={{ color: "var(--foreground-muted)" }}>
               {nextCycle}
             </p>
           </div>
@@ -368,25 +378,30 @@ function StatCard({
 }) {
   return (
     <div
-      className="rounded-lg px-3 py-2 text-center"
-      style={{ background: `${color}08`, border: `1px solid ${color}18` }}
+      className="rounded-xl px-4 py-3"
+      style={{ background: `${color}08`, border: `1px solid ${color}15` }}
     >
       {isBoolean ? (
-        <p className="text-lg font-bold" style={{ color }}>
+        <p className="text-xl font-bold" style={{ color }}>
           {booleanValue ? `${value}` : "None"}
         </p>
       ) : (
-        <p className="text-lg font-bold" style={{ color }}>{value}</p>
+        <p className="text-xl font-bold" style={{ color }}>{value}</p>
       )}
-      <p className="text-[9px] uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>{label}</p>
+      <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: "var(--foreground-dim)" }}>{label}</p>
     </div>
   );
 }
 
 function SectionHeader({ icon, title, color }: { icon: React.ReactNode; title: string; color: string }) {
   return (
-    <div className="flex items-center gap-2">
-      <div style={{ color }}>{icon}</div>
+    <div className="flex items-center gap-2.5">
+      <div
+        className="w-7 h-7 rounded-lg flex items-center justify-center"
+        style={{ background: `${color}12`, color }}
+      >
+        {icon}
+      </div>
       <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color }}>{title}</h3>
       <div className="flex-1 h-px" style={{ background: `linear-gradient(to right, ${color}30, transparent)` }} />
     </div>
@@ -428,8 +443,12 @@ function MatrixQuadrant({
           {items.map((item, i) => (
             <div
               key={i}
-              className="rounded px-2 py-1 text-[10px]"
-              style={{ background: "rgba(0,0,0,0.2)", color: "var(--foreground-muted)" }}
+              className="rounded px-2 py-1.5 text-[10px]"
+              style={{
+                background: "var(--surface)",
+                color: "var(--foreground-muted)",
+                borderLeft: `2px solid ${color}`,
+              }}
             >
               {item}
             </div>

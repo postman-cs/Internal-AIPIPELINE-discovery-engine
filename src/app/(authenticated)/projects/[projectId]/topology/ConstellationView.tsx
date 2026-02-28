@@ -110,11 +110,9 @@ function DetailRow({ label, value, mono }: { label: string; value: string; mono?
 export default function ConstellationView({
   nodes,
   edges,
-  externalHighlight,
 }: {
   nodes: TopoNode[];
   edges: TopoEdge[];
-  externalHighlight?: { nodeIds: string[]; edgeIds: string[] } | null;
 }) {
   // State
   const [selectedNode, setSelectedNode] = useState<GNode | null>(null);
@@ -226,12 +224,6 @@ export default function ConstellationView({
   const highlightNodeIds = useMemo(() => {
     const set = new Set<string>();
 
-    // External highlight (from story mode)
-    if (externalHighlight) {
-      for (const id of externalHighlight.nodeIds) set.add(id);
-      return set;
-    }
-
     if (highlightMode === "Off" && !selectedNode) return set;
 
     if (highlightMode === "Dependencies" && selectedNode) {
@@ -262,15 +254,10 @@ export default function ConstellationView({
       }
     }
     return set;
-  }, [highlightMode, selectedNode, graphLinks, externalHighlight]);
+  }, [highlightMode, selectedNode, graphLinks]);
 
   const highlightEdgeKeys = useMemo(() => {
     const set = new Set<string>();
-
-    if (externalHighlight) {
-      for (const ek of externalHighlight.edgeIds) set.add(ek);
-      return set;
-    }
 
     if (highlightMode === "Dependencies" && selectedNode) {
       for (const l of graphLinks) {
@@ -288,7 +275,7 @@ export default function ConstellationView({
       }
     }
     return set;
-  }, [highlightMode, selectedNode, graphLinks, externalHighlight]);
+  }, [highlightMode, selectedNode, graphLinks]);
 
   const isHighlighting = highlightNodeIds.size > 0 || highlightEdgeKeys.size > 0;
 

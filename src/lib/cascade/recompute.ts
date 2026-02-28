@@ -282,26 +282,22 @@ async function executePhaseAgentWithAssumptions(
   snapshotId: string,
   recomputeJobId: string
 ): Promise<{ proposalId: string; assumptionIds: string[]; blockerIds: string[] }> {
-  // Check if this phase already has assumptions from a prior run.
-  // If so, skip extraction to avoid re-creating the same noise.
-  const existingAssumptions = await prisma.assumption.count({
-    where: { projectId, phase },
-  });
-  const skipExtraction = existingAssumptions > 0;
-
   const { proposedJson, markdown, aiRunIds, assumptions, detectedBlockers } = await executePhaseAgent(
     projectId, projectName, phase
   );
 
+  // Always persist assumptions — persistPhaseAssumptions handles dedup
+  // internally (cleans stale PENDING/AUTO_VERIFIED, skips duplicates by
+  // phase+category, and auto-verifies claims that match prior verifications).
   let assumptionIds: string[] = [];
-  if (!skipExtraction && assumptions.length > 0) {
+  if (assumptions.length > 0) {
     assumptionIds = await persistPhaseAssumptions(
       projectId, phase, assumptions, recomputeJobId
     );
   }
 
   let blockerIds: string[] = [];
-  if (!skipExtraction && detectedBlockers.length > 0) {
+  if (detectedBlockers.length > 0) {
     blockerIds = await persistDetectedBlockers(
       projectId, detectedBlockers, phase, `${phase}-agent`
     );
