@@ -18,7 +18,7 @@ import {
   formatEvidenceForPrompt,
 } from "@/lib/ai/retrieval";
 
-const SYSTEM_PROMPT = `You are a senior Solutions Engineer at Postman building a deployment plan for a customer's API platform transformation.
+const SYSTEM_PROMPT = `You are a senior Success Captain (CSE) at Postman building a deployment plan for a customer's API platform transformation.
 
 TASK: Given the test solution results, craft solution implementation plan, current topology, and discovery context, produce a structured deployment plan with CI/CD pipeline stages and environment promotion gates.
 
@@ -67,7 +67,8 @@ export async function runDeploymentPlanner(
   testSolutionContent: Record<string, unknown>,
   craftSolutionContent: Record<string, unknown>,
   topologyContent: Record<string, unknown>,
-  discoveryContent: Record<string, unknown>
+  discoveryContent: Record<string, unknown>,
+  serviceTemplateContext?: string | null
 ) {
   const evidence = await retrieveMultiQueryEvidence(projectId, [
     "deployment rollout plan migration",
@@ -95,7 +96,8 @@ ${JSON.stringify(discoveryContent, null, 2).slice(0, 2000)}
 ## Evidence
 ${evidenceBlock}
 
-Produce a JSON deployment plan with: deploymentSteps, changeManagementNotes, trainingRequirements, communicationPlan, goLiveCriteria, overallTimeline, ciCdStages (for whatever CI/CD platforms are relevant), environmentPromotionGates.`;
+Produce a JSON deployment plan with: deploymentSteps, changeManagementNotes, trainingRequirements, communicationPlan, goLiveCriteria, overallTimeline, ciCdStages (for whatever CI/CD platforms are relevant), environmentPromotionGates.
+${serviceTemplateContext ? `\n${serviceTemplateContext}\n\nThe customer's service template is provided above. Use it to inform deployment targets, environment configurations, and pipeline stage definitions.` : ""}`;
 
   return runAgent<DeploymentPlanOutput>({
     agentType: "deploymentPlanner",

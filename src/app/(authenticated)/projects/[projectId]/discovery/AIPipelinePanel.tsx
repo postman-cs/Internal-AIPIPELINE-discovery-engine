@@ -81,6 +81,9 @@ export function AIPipelinePanel({ projectId, evidenceStats, hasArtifact, latestV
         const msg = `${result.chunkCount} chunks created.${cascadeNote}`;
         setIngestMsg({ type: "success", text: msg });
         toast.success("Evidence ingested", msg);
+        window.dispatchEvent(new CustomEvent("discovery-ingest", {
+          detail: { text: ingestContent, sourceType: ingestSource },
+        }));
         setIngestTitle("");
         setIngestContent("");
         setImagePreview(null);
@@ -131,7 +134,7 @@ export function AIPipelinePanel({ projectId, evidenceStats, hasArtifact, latestV
 
   // --- Pipeline ---
   const handleRunPipeline = () => {
-    setPipelineMsg({ type: "running", text: "Running 5-agent pipeline... This may take 30-60 seconds." });
+    setPipelineMsg({ type: "running", text: "Running 5-agent pipeline... This typically takes 2-5 minutes." });
     toast.info("Pipeline started", "Running 5 AI agents...");
     startTransition(async () => {
       const result = await runAIDiscoveryPipeline(projectId);

@@ -15,7 +15,6 @@ import type {
   craftSolutionOutputSchema,
   testDesignOutputSchema,
   deploymentPlanOutputSchema,
-  monitoringOutputSchema,
   infrastructureOutputSchema,
 } from "@/lib/ai/agents/topologyTypes";
 
@@ -26,7 +25,6 @@ import type {
 type CraftSolutionOutput = z.infer<typeof craftSolutionOutputSchema>;
 type TestDesignOutput = z.infer<typeof testDesignOutputSchema>;
 type DeploymentPlanOutput = z.infer<typeof deploymentPlanOutputSchema>;
-type MonitoringOutput = z.infer<typeof monitoringOutputSchema>;
 type InfrastructureOutput = z.infer<typeof infrastructureOutputSchema>;
 
 export interface CiCdPlaybookData {
@@ -50,9 +48,6 @@ export interface CiCdPlaybookData {
   // From DEPLOYMENT_PLAN
   ciCdStages: NonNullable<DeploymentPlanOutput["ciCdStages"]>;
   environmentPromotionGates: NonNullable<DeploymentPlanOutput["environmentPromotionGates"]>;
-
-  // From MONITORING
-  postmanMonitors: NonNullable<MonitoringOutput["postmanMonitors"]>;
 
   // From INFRASTRUCTURE (Feature #9)
   cloudResources: NonNullable<InfrastructureOutput["cloudResources"]>;
@@ -81,7 +76,7 @@ export async function getCiCdPlaybookData(projectId: string): Promise<CiCdPlaybo
     return emptyPlaybook("Unknown Project");
   }
 
-  const phases: Phase[] = ["CRAFT_SOLUTION", "TEST_DESIGN", "DEPLOYMENT_PLAN", "MONITORING", "INFRASTRUCTURE"];
+  const phases: Phase[] = ["CRAFT_SOLUTION", "TEST_DESIGN", "DEPLOYMENT_PLAN", "BUILD_LOG", "INFRASTRUCTURE"];
 
   const artifacts = await prisma.phaseArtifact.findMany({
     where: {
@@ -115,13 +110,11 @@ export async function getCiCdPlaybookData(projectId: string): Promise<CiCdPlaybo
   const craft = phaseMap.get("CRAFT_SOLUTION");
   const test = phaseMap.get("TEST_DESIGN");
   const deploy = phaseMap.get("DEPLOYMENT_PLAN");
-  const monitor = phaseMap.get("MONITORING");
   const infra = phaseMap.get("INFRASTRUCTURE");
 
   const craftContent = craft?.content as Partial<CraftSolutionOutput> | undefined;
   const testContent = test?.content as Partial<TestDesignOutput> | undefined;
   const deployContent = deploy?.content as Partial<DeploymentPlanOutput> | undefined;
-  const monitorContent = monitor?.content as Partial<MonitoringOutput> | undefined;
   const infraContent = infra?.content as Partial<InfrastructureOutput> | undefined;
 
   const phaseVersions: Record<string, number> = {};
@@ -136,7 +129,6 @@ export async function getCiCdPlaybookData(projectId: string): Promise<CiCdPlaybo
     testContent?.testCases?.some((t) => t.postmanTestScript) ||
     deployContent?.ciCdStages?.length ||
     deployContent?.environmentPromotionGates?.length ||
-    monitorContent?.postmanMonitors?.length ||
     infraContent?.cloudResources?.length ||
     infraContent?.iacSnippets?.length
   );
@@ -165,7 +157,6 @@ export async function getCiCdPlaybookData(projectId: string): Promise<CiCdPlaybo
       })),
     ciCdStages: normalizedStages,
     environmentPromotionGates: deployContent?.environmentPromotionGates ?? [],
-    postmanMonitors: monitorContent?.postmanMonitors ?? [],
     cloudResources: infraContent?.cloudResources ?? [],
     iacSnippets: infraContent?.iacSnippets ?? [],
     containerManifests: infraContent?.containerManifests ?? [],
@@ -185,7 +176,6 @@ function emptyPlaybook(projectName: string): CiCdPlaybookData {
     testCases: [],
     ciCdStages: [],
     environmentPromotionGates: [],
-    postmanMonitors: [],
     cloudResources: [],
     iacSnippets: [],
     containerManifests: [],

@@ -5,15 +5,25 @@
  * Dispatches to the correct AI agent for each implemented phase.
  * Skips phases whose upstream dependencies aren't CLEAN yet.
  * Generates Proposals — never directly writes artifacts.
+ *
+ * Optimisations:
+ * - Phases at the same topological tier run concurrently (Promise.all).
+ * - Upstream readiness is checked in a single batched query per tier.
+ * - BUILD_LOG is skipped in automated cascades (manual-only).
+ * - Prior proposal content is reused when upstream versions + snapshot match.
+ * - Agent calls are wrapped with a configurable timeout and a single retry.
+ * - Token usage from AIRun records is tracked per task.
  */
 
+import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { Phase } from "@prisma/client";
-import { getPhaseNode, getDependencies, getAllPhasesOrdered } from "./phases";
+import { getPhaseNode, getDependencies, getTopologicalTiers } from "./phases";
 import { generatePatch, generateDiffSummary } from "./patch";
 import type { Prisma } from "@prisma/client";
-import { persistPhaseAssumptions, isPhaseGateClear } from "@/lib/assumptions/engine";
+import { persistPhaseAssumptions, isPhaseGateClear, autoVerifyAssumptions } from "@/lib/assumptions/engine";
 import { persistDetectedBlockers } from "@/lib/blockers/engine";
+import { pluginRegistry } from "@/lib/ai/plugins";
 import { applyProposal } from "@/lib/actions/cascade";
 import type { AssumptionItem, BlockerDetection } from "@/lib/ai/agents/topologyTypes";
 
@@ -26,9 +36,8 @@ import { runTestDesigner } from "@/lib/ai/agents/testDesigner";
 import { runCraftSolution } from "@/lib/ai/agents/craftSolution";
 import { runTestSolution } from "@/lib/ai/agents/testSolution";
 import { runDeploymentPlanner } from "@/lib/ai/agents/deploymentPlanner";
-import { runMonitoringPlanner } from "@/lib/ai/agents/monitoringPlanner";
-import { runIterationPlanner } from "@/lib/ai/agents/iterationPlanner";
 import { runInfrastructurePlanner } from "@/lib/ai/agents/infrastructurePlanner";
+import { runBuildLogGenerator, buildLogToMarkdown } from "@/lib/ai/agents/buildLogGenerator";
 
 // Markdown generators
 import {
@@ -40,18 +49,185 @@ import {
   craftSolutionToMarkdown,
   testSolutionToMarkdown,
   deploymentPlanToMarkdown,
-  monitoringToMarkdown,
-  iterationToMarkdown,
 } from "@/lib/ai/agents/topologyTypes";
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+const AGENT_TIMEOUT_MS = parseInt(
+  process.env.CASCADE_AGENT_TIMEOUT_MS ?? "600000",
+  10
+);
+
+// ---------------------------------------------------------------------------
+// Timeout & retry helpers
+// ---------------------------------------------------------------------------
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Agent timed out after ${ms}ms`)),
+      ms
+    );
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); }
+    );
+  });
+}
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  retries = 1,
+  baseDelayMs = 2000
+): Promise<T> {
+  let lastError!: Error;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, baseDelayMs * Math.pow(2, attempt)));
+      }
+    }
+  }
+  throw lastError;
+}
+
+// ---------------------------------------------------------------------------
+// Input-hash helpers (for cascade result caching)
+// ---------------------------------------------------------------------------
+
+function computeInputHash(
+  snapshotId: string,
+  upstreamVersions: Record<string, number>
+): string {
+  const sorted = Object.entries(upstreamVersions).sort(([a], [b]) =>
+    a.localeCompare(b)
+  );
+  const payload = `${snapshotId}|${sorted.map(([p, v]) => `${p}@${v}`).join(",")}`;
+  return createHash("sha256").update(payload).digest("hex").slice(0, 16);
+}
+
+async function checkCacheHit(
+  projectId: string,
+  phase: Phase,
+  currentInputHash: string
+): Promise<{
+  proposedJson: Record<string, unknown>;
+  markdown: string;
+  aiRunIds: string[];
+} | null> {
+  const lastAccepted = await prisma.proposal.findFirst({
+    where: { projectId, phase, status: "ACCEPTED" },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!lastAccepted) return null;
+
+  const producerTask = await prisma.recomputeTask.findFirst({
+    where: { proposalId: lastAccepted.id },
+  });
+  if (!producerTask) return null;
+
+  const inputRefs = producerTask.inputRefsJson as {
+    upstreamVersions?: Record<string, number>;
+    snapshotId?: string;
+  };
+  const cachedHash = computeInputHash(
+    inputRefs.snapshotId ?? "",
+    inputRefs.upstreamVersions ?? {}
+  );
+  if (cachedHash !== currentInputHash) return null;
+
+  return {
+    proposedJson: lastAccepted.proposedJson as Record<string, unknown>,
+    markdown: lastAccepted.proposedMarkdown ?? "",
+    aiRunIds: (lastAccepted.aiRunIds as string[]) ?? [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Batched upstream readiness
+// ---------------------------------------------------------------------------
+
+interface ArtifactInfo {
+  version: number;
+  status: string;
+}
+
+async function batchCheckUpstreamArtifacts(
+  projectId: string,
+  deps: Phase[]
+): Promise<Map<Phase, ArtifactInfo>> {
+  if (deps.length === 0) return new Map();
+
+  const artifacts = await prisma.phaseArtifact.findMany({
+    where: { projectId, phase: { in: deps } },
+    orderBy: { version: "desc" },
+    distinct: ["phase"],
+    select: { phase: true, version: true, status: true },
+  });
+
+  return new Map(
+    artifacts.map((a) => [a.phase, { version: a.version, status: a.status }])
+  );
+}
+
+function isArtifactReady(info: ArtifactInfo | undefined): boolean {
+  return !!info && (info.status === "CLEAN" || info.status === "CLEAN_WITH_EXCEPTIONS");
+}
+
+// ---------------------------------------------------------------------------
+// Token usage tracking
+// ---------------------------------------------------------------------------
+
+async function getTokenUsageFromRuns(aiRunIds: string[]): Promise<number> {
+  if (aiRunIds.length === 0) return 0;
+  try {
+    const runs = await prisma.aIRun.findMany({
+      where: { id: { in: aiRunIds } },
+      select: { tokenUsage: true },
+    });
+    let total = 0;
+    for (const run of runs) {
+      if (run.tokenUsage && typeof run.tokenUsage === "object") {
+        const usage = run.tokenUsage as Record<string, number>;
+        total += usage.totalTokens ?? usage.total_tokens ?? 0;
+      }
+    }
+    return total;
+  } catch {
+    return 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Single-task result type
+// ---------------------------------------------------------------------------
+
+interface TaskResult {
+  phase: Phase;
+  status: "completed" | "skipped" | "failed";
+  proposalId?: string;
+  assumptionIds: string[];
+  blockerIds: string[];
+  error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
 
 /**
  * Execute all tasks in a RecomputeJob.
- * Runs each PENDING task in topological order.
+ * Groups tasks by topological tier and runs each tier concurrently.
  * Skips phases whose upstream dependencies aren't satisfied.
  *
  * Assumption Verification Integration:
  * - After each agent runs, its assumptions are persisted for human review.
- * - In "gated" mode: pauses at each phase with critical unverified assumptions.
+ * - In "gated" mode: pauses at each tier with critical unverified assumptions.
  * - In "eager" mode (default): runs all phases, surfaces all assumptions at once.
  * - Verified/corrected assumptions from prior runs are injected into agent prompts
  *   automatically via the runner's constraint injection.
@@ -86,10 +262,9 @@ export async function executeRecomputeJob(
     data: { status: "RUNNING" },
   });
 
-  const allPhases = getAllPhasesOrdered();
-  const sortedTasks = [...job.tasks].sort((a, b) => {
-    return allPhases.indexOf(a.phase) - allPhases.indexOf(b.phase);
-  });
+  const tiers = getTopologicalTiers();
+  const sortedTierKeys = [...tiers.keys()].sort((a, b) => a - b);
+  const taskByPhase = new Map(job.tasks.map((t) => [t.phase, t]));
 
   const proposals: string[] = [];
   const errors: string[] = [];
@@ -99,116 +274,103 @@ export async function executeRecomputeJob(
   let completedTasks = 0;
   let pausedAtPhase: string | undefined;
 
-  for (const task of sortedTasks) {
-    if (task.status !== "PENDING") continue;
+  for (const tierKey of sortedTierKeys) {
+    if (pausedAtPhase) break;
 
-    // -----------------------------------------------------------------------
-    // GATED MODE: Check if prior phase has unverified critical assumptions
-    // -----------------------------------------------------------------------
+    const tierPhases = tiers.get(tierKey)!;
+
+    const tierTasks = tierPhases
+      .map((p) => taskByPhase.get(p))
+      .filter(
+        (t): t is NonNullable<typeof t> => t != null && t.status === "PENDING"
+      );
+
+    if (tierTasks.length === 0) continue;
+
+    // --- Gated mode: check assumption gates before starting this tier -------
     if (options?.gatedMode && completedTasks > 0) {
-      const gate = await isPhaseGateClear(job.projectId, task.phase);
-      if (!gate.clear) {
-        pausedAtPhase = task.phase;
-        await prisma.recomputeTask.update({
-          where: { id: task.id },
-          data: {
-            status: "SKIPPED",
-            message: `Paused: ${gate.pendingCritical} critical assumption(s) need human verification before this phase can proceed.`,
-            finishedAt: new Date(),
-          },
-        });
-        skipped.push(task.phase);
+      let gateBlocked = false;
+      for (const task of tierTasks) {
+        const gate = await isPhaseGateClear(job.projectId, task.phase);
+        if (!gate.clear) {
+          gateBlocked = true;
+          pausedAtPhase = task.phase;
+          await prisma.recomputeTask.update({
+            where: { id: task.id },
+            data: {
+              status: "SKIPPED",
+              message: `Paused: ${gate.pendingCritical} critical assumption(s) need human verification before this phase can proceed.`,
+              finishedAt: new Date(),
+            },
+          });
+          skipped.push(task.phase);
 
-        // Skip all remaining tasks too
-        for (const remaining of sortedTasks) {
-          if (remaining.status === "PENDING" && remaining.id !== task.id) {
-            const rOrder = allPhases.indexOf(remaining.phase);
-            const tOrder = allPhases.indexOf(task.phase);
-            if (rOrder >= tOrder) {
-              await prisma.recomputeTask.update({
-                where: { id: remaining.id },
-                data: {
-                  status: "SKIPPED",
-                  message: `Paused: waiting for assumption verification at ${task.phase}`,
-                  finishedAt: new Date(),
-                },
-              });
-              skipped.push(remaining.phase);
+          for (const remaining of job.tasks) {
+            if (remaining.status === "PENDING" && remaining.id !== task.id) {
+              const rNode = getPhaseNode(remaining.phase);
+              const tNode = getPhaseNode(task.phase);
+              if (rNode.order >= tNode.order) {
+                await prisma.recomputeTask.update({
+                  where: { id: remaining.id },
+                  data: {
+                    status: "SKIPPED",
+                    message: `Paused: waiting for assumption verification at ${task.phase}`,
+                    finishedAt: new Date(),
+                  },
+                });
+                skipped.push(remaining.phase);
+              }
             }
           }
+          break;
         }
-        break; // Stop processing
       }
+      if (gateBlocked) break;
     }
 
-    try {
-      await prisma.recomputeTask.update({
-        where: { id: task.id },
-        data: { status: "RUNNING", startedAt: new Date() },
-      });
-
-      const node = getPhaseNode(task.phase);
-
-      if (!node.implemented) {
-        const proposalId = await createStalePlaceholder(
-          task.id, job.projectId, task.phase, job.snapshotId || "", node.label
-        );
-        proposals.push(proposalId);
-        completedTasks++;
-        await prisma.recomputeTask.update({
-          where: { id: task.id },
-          data: { status: "COMPLETED", finishedAt: new Date() },
-        });
-        continue;
+    // --- Point 5: batch upstream readiness for the whole tier ---------------
+    const allDepsInTier = new Set<Phase>();
+    for (const task of tierTasks) {
+      for (const dep of getDependencies(task.phase)) {
+        allDepsInTier.add(dep);
       }
+    }
+    const upstreamInfo = await batchCheckUpstreamArtifacts(
+      job.projectId,
+      [...allDepsInTier]
+    );
 
-      // Check upstream dependencies have CLEAN artifacts
-      const deps = getDependencies(task.phase);
-      const upstreamOk = await checkUpstreamReady(job.projectId, deps);
+    // --- Point 1: run tier tasks concurrently ------------------------------
+    const results = await Promise.all(
+      tierTasks.map((task) =>
+        processSingleTask(task, job, upstreamInfo)
+      )
+    );
 
-      if (!upstreamOk && task.phase !== "DISCOVERY") {
-        skipped.push(task.phase);
-        await prisma.recomputeTask.update({
-          where: { id: task.id },
-          data: {
-            status: "SKIPPED",
-            message: `Upstream dependencies not ready: ${deps.join(", ")}`,
-            finishedAt: new Date(),
-          },
-        });
-        continue;
+    // --- Collect results & auto-accept -------------------------------------
+    for (const result of results) {
+      switch (result.status) {
+        case "completed":
+          completedTasks++;
+          if (result.proposalId) proposals.push(result.proposalId);
+          allAssumptionIds.push(...result.assumptionIds);
+          allBlockerIds.push(...result.blockerIds);
+
+          if (options?.autoAccept && result.proposalId) {
+            try {
+              await applyProposal(result.proposalId, { skipMarkDirty: true });
+            } catch {
+              // Non-fatal: proposal stays PENDING if apply fails
+            }
+          }
+          break;
+        case "skipped":
+          skipped.push(result.phase);
+          break;
+        case "failed":
+          if (result.error) errors.push(`${result.phase}: ${result.error}`);
+          break;
       }
-
-      // Execute the agent + persist assumptions + detect blockers
-      const { proposalId, assumptionIds, blockerIds } = await executePhaseAgentWithAssumptions(
-        task.id, job.projectId, job.project.name, task.phase, job.snapshotId || "", jobId
-      );
-      proposals.push(proposalId);
-      allAssumptionIds.push(...assumptionIds);
-      allBlockerIds.push(...blockerIds);
-      completedTasks++;
-
-      // Auto-accept: apply proposal immediately so the phase becomes CLEAN
-      // and downstream phases can see it as a satisfied dependency.
-      if (options?.autoAccept) {
-        try {
-          await applyProposal(proposalId, { skipMarkDirty: true });
-        } catch {
-          // Non-fatal: proposal stays PENDING if apply fails
-        }
-      }
-
-      await prisma.recomputeTask.update({
-        where: { id: task.id },
-        data: { status: "COMPLETED", finishedAt: new Date() },
-      });
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unknown error";
-      errors.push(`${task.phase}: ${msg}`);
-      await prisma.recomputeTask.update({
-        where: { id: task.id },
-        data: { status: "FAILED", message: msg, finishedAt: new Date() },
-      });
     }
   }
 
@@ -226,29 +388,166 @@ export async function executeRecomputeJob(
     },
   });
 
-  return { completedTasks, proposals, errors, skipped, assumptionIds: allAssumptionIds, blockerIds: allBlockerIds, pausedAtPhase };
+  return {
+    completedTasks,
+    proposals,
+    errors,
+    skipped,
+    assumptionIds: allAssumptionIds,
+    blockerIds: allBlockerIds,
+    pausedAtPhase,
+  };
 }
 
 // ---------------------------------------------------------------------------
-// Upstream readiness check
+// Single task processor (runs inside Promise.all per tier)
 // ---------------------------------------------------------------------------
 
-async function checkUpstreamReady(
-  projectId: string,
-  deps: Phase[]
-): Promise<boolean> {
-  if (deps.length === 0) return true;
+async function processSingleTask(
+  task: { id: string; phase: Phase; status: string },
+  job: {
+    id: string;
+    projectId: string;
+    snapshotId: string | null;
+    project: { name: string };
+  },
+  upstreamInfo: Map<Phase, ArtifactInfo>
+): Promise<TaskResult> {
+  const { phase } = task;
+  const snapshotId = job.snapshotId || "";
 
-  for (const dep of deps) {
-    const artifact = await prisma.phaseArtifact.findFirst({
-      where: { projectId, phase: dep },
-      orderBy: { version: "desc" },
+  try {
+    // --- Point 12: persist startedAt ---------------------------------------
+    await prisma.recomputeTask.update({
+      where: { id: task.id },
+      data: { status: "RUNNING", startedAt: new Date() },
     });
-    if (!artifact || (artifact.status !== "CLEAN" && artifact.status !== "CLEAN_WITH_EXCEPTIONS")) {
-      return false;
+
+    const node = getPhaseNode(phase);
+
+    if (!node.implemented) {
+      const proposalId = await createStalePlaceholder(
+        task.id,
+        job.projectId,
+        phase,
+        snapshotId,
+        node.label
+      );
+      await prisma.recomputeTask.update({
+        where: { id: task.id },
+        data: { status: "COMPLETED", finishedAt: new Date() },
+      });
+      return { phase, status: "completed", proposalId, assumptionIds: [], blockerIds: [] };
     }
+
+    // Check upstream dependencies via the pre-fetched batch result
+    const deps = getDependencies(phase);
+    if (phase !== "DISCOVERY") {
+      const allReady = deps.every((dep) => isArtifactReady(upstreamInfo.get(dep)));
+      if (!allReady) {
+        await prisma.recomputeTask.update({
+          where: { id: task.id },
+          data: {
+            status: "SKIPPED",
+            message: `Upstream dependencies not ready: ${deps.join(", ")}`,
+            finishedAt: new Date(),
+          },
+        });
+        return { phase, status: "skipped", assumptionIds: [], blockerIds: [] };
+      }
+    }
+
+    // --- Point 9: cascade result caching -----------------------------------
+    const upstreamVersions: Record<string, number> = {};
+    for (const dep of deps) {
+      const info = upstreamInfo.get(dep);
+      if (info) upstreamVersions[dep] = info.version;
+    }
+    const inputHash = computeInputHash(snapshotId, upstreamVersions);
+
+    const cached = await checkCacheHit(job.projectId, phase, inputHash);
+    if (cached) {
+      const proposalId = await createProposal(
+        task.id,
+        job.projectId,
+        phase,
+        snapshotId,
+        cached.proposedJson,
+        cached.markdown,
+        [...cached.aiRunIds, "cache-hit"]
+      );
+      await prisma.recomputeTask.update({
+        where: { id: task.id },
+        data: {
+          status: "COMPLETED",
+          finishedAt: new Date(),
+          message: "Cache hit — reused prior proposal",
+        },
+      });
+      return { phase, status: "completed", proposalId, assumptionIds: [], blockerIds: [] };
+    }
+
+    // --- Point 11: agent timeout + single retry ----------------------------
+    const agentResult = await withRetry(
+      () => withTimeout(
+        executePhaseAgent(job.projectId, job.project.name, phase),
+        AGENT_TIMEOUT_MS
+      )
+    );
+
+    let assumptionIds: string[] = [];
+    if (agentResult.assumptions.length > 0) {
+      assumptionIds = await persistPhaseAssumptions(
+        job.projectId,
+        phase,
+        agentResult.assumptions,
+        job.id,
+      );
+      try {
+        await autoVerifyAssumptions(job.projectId, agentResult.assumptions);
+      } catch { /* non-fatal: auto-verification is best-effort */ }
+    }
+
+    let blockerIds: string[] = [];
+    if (agentResult.detectedBlockers.length > 0) {
+      blockerIds = await persistDetectedBlockers(
+        job.projectId,
+        agentResult.detectedBlockers,
+        phase,
+        `${phase}-agent`
+      );
+    }
+
+    const proposalId = await createProposal(
+      task.id,
+      job.projectId,
+      phase,
+      snapshotId,
+      agentResult.proposedJson,
+      agentResult.markdown,
+      agentResult.aiRunIds
+    );
+
+    // --- Point 12: token usage tracking + finishedAt -----------------------
+    const tokenTotal = await getTokenUsageFromRuns(agentResult.aiRunIds);
+    await prisma.recomputeTask.update({
+      where: { id: task.id },
+      data: {
+        status: "COMPLETED",
+        finishedAt: new Date(),
+        message: tokenTotal > 0 ? `Completed (${tokenTotal} tokens)` : undefined,
+      },
+    });
+
+    return { phase, status: "completed", proposalId, assumptionIds, blockerIds };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    await prisma.recomputeTask.update({
+      where: { id: task.id },
+      data: { status: "FAILED", message: msg, finishedAt: new Date() },
+    });
+    return { phase, status: "failed", error: msg, assumptionIds: [], blockerIds: [] };
   }
-  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -266,54 +565,53 @@ async function getUpstreamContent(
   return (artifact?.contentJson as Record<string, unknown>) ?? {};
 }
 
+async function getKeplerContextBlock(projectId: string): Promise<string> {
+  const artifact = await prisma.discoveryArtifact.findFirst({
+    where: { projectId },
+    orderBy: { version: "desc" },
+    select: {
+      industry: true,
+      engineeringSize: true,
+      maturityLevel: true,
+      publicApiPresence: true,
+      keplerPaste: true,
+      cloudGatewaySignals: true,
+    },
+  });
+  if (!artifact) return "";
+
+  const parts: string[] = ["PROJECT CONTEXT:"];
+  if (artifact.industry) parts.push(`  Industry: ${artifact.industry}`);
+  if (artifact.engineeringSize) parts.push(`  Engineering: ${artifact.engineeringSize} engineers`);
+  if (artifact.maturityLevel != null) parts.push(`  Maturity Level: ${artifact.maturityLevel}`);
+  if (artifact.publicApiPresence) parts.push(`  Public API Presence: ${artifact.publicApiPresence}`);
+  if (artifact.cloudGatewaySignals) parts.push(`  Cloud/Gateway Signals: ${artifact.cloudGatewaySignals.slice(0, 500)}`);
+
+  return parts.length > 1 ? parts.join("\n") + "\n" : "";
+}
+
+async function getServiceTemplateContext(
+  projectId: string
+): Promise<string | null> {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: {
+      serviceTemplateContent: true,
+      serviceTemplateType: true,
+      serviceTemplateFileName: true,
+    },
+  });
+  if (!project?.serviceTemplateContent) return null;
+  const typeLabel = project.serviceTemplateType ?? "custom";
+  const fileName = project.serviceTemplateFileName ?? "template";
+  const langHint = typeLabel === "openapi" ? "yaml" : typeLabel === "postman-collection" ? "json" : typeLabel;
+  return `## Customer Service Template (${typeLabel}: ${fileName})\n\`\`\`${langHint}\n${project.serviceTemplateContent}\n\`\`\``;
+}
+
 // ---------------------------------------------------------------------------
 // Phase agent dispatcher
 // ---------------------------------------------------------------------------
 
-/**
- * Wrapper that executes the phase agent, then persists any assumptions
- * and detected blockers it surfaced.
- */
-async function executePhaseAgentWithAssumptions(
-  taskId: string,
-  projectId: string,
-  projectName: string,
-  phase: Phase,
-  snapshotId: string,
-  recomputeJobId: string
-): Promise<{ proposalId: string; assumptionIds: string[]; blockerIds: string[] }> {
-  const { proposedJson, markdown, aiRunIds, assumptions, detectedBlockers } = await executePhaseAgent(
-    projectId, projectName, phase
-  );
-
-  // Always persist assumptions — persistPhaseAssumptions handles dedup
-  // internally (cleans stale PENDING/AUTO_VERIFIED, skips duplicates by
-  // phase+category, and auto-verifies claims that match prior verifications).
-  let assumptionIds: string[] = [];
-  if (assumptions.length > 0) {
-    assumptionIds = await persistPhaseAssumptions(
-      projectId, phase, assumptions, recomputeJobId
-    );
-  }
-
-  let blockerIds: string[] = [];
-  if (detectedBlockers.length > 0) {
-    blockerIds = await persistDetectedBlockers(
-      projectId, detectedBlockers, phase, `${phase}-agent`
-    );
-  }
-
-  const proposalId = await createProposal(
-    taskId, projectId, phase, snapshotId, proposedJson, markdown, aiRunIds
-  );
-
-  return { proposalId, assumptionIds, blockerIds };
-}
-
-/**
- * Phase agent dispatcher. Executes the correct AI agent for each phase.
- * Returns proposed content, markdown, AI run IDs, and extracted assumptions.
- */
 async function executePhaseAgent(
   projectId: string,
   projectName: string,
@@ -325,11 +623,32 @@ async function executePhaseAgent(
   assumptions: AssumptionItem[];
   detectedBlockers: BlockerDetection[];
 }> {
+  const plugin = pluginRegistry.getPlugin(phase);
+  if (plugin) {
+    const result = await plugin.run({
+      projectId,
+      projectName,
+      phase,
+      upstreamContent: {},
+      evidenceChunks: [],
+    });
+    return {
+      proposedJson: result.proposedJson,
+      markdown: result.markdown,
+      aiRunIds: result.aiRunIds,
+      assumptions: result.assumptions as AssumptionItem[],
+      detectedBlockers: result.detectedBlockers as BlockerDetection[],
+    };
+  }
+
   let proposedJson: Record<string, unknown>;
   let markdown: string;
   let aiRunIds: string[] = [];
   let assumptions: AssumptionItem[] = [];
   let detectedBlockers: BlockerDetection[] = [];
+
+  // Point 8: Kepler context enrichment for post-DISCOVERY phases
+  const keplerContext = phase !== "DISCOVERY" ? await getKeplerContextBlock(projectId) : "";
 
   switch (phase) {
     case "DISCOVERY": {
@@ -358,7 +677,6 @@ async function executePhaseAgent(
       };
       markdown = pipeline.brief.briefMarkdown;
       aiRunIds = pipeline.aiRunIds;
-      // Discovery pipeline is multi-agent; assumptions and blockers come from each sub-agent
       assumptions = (pipeline.assumptions ?? []) as AssumptionItem[];
       detectedBlockers = (pipeline.detectedBlockers ?? []) as BlockerDetection[];
       break;
@@ -366,7 +684,9 @@ async function executePhaseAgent(
 
     case "CURRENT_TOPOLOGY": {
       const discovery = await getUpstreamContent(projectId, "DISCOVERY");
-      const result = await runCurrentTopologyBuilder(projectId, projectName, discovery);
+      if (keplerContext) discovery._projectContext = keplerContext;
+      const svcTemplate = await getServiceTemplateContext(projectId);
+      const result = await runCurrentTopologyBuilder(projectId, projectName, discovery, svcTemplate);
       proposedJson = result.output as unknown as Record<string, unknown>;
       markdown = topologyToMarkdown(result.output);
       aiRunIds = [result.aiRunId];
@@ -377,6 +697,7 @@ async function executePhaseAgent(
 
     case "DESIRED_FUTURE_STATE": {
       const discovery = await getUpstreamContent(projectId, "DISCOVERY");
+      if (keplerContext) discovery._projectContext = keplerContext;
       const topology = await getUpstreamContent(projectId, "CURRENT_TOPOLOGY");
       const result = await runFutureStateDesigner(projectId, projectName, topology, discovery);
       proposedJson = result.output as unknown as Record<string, unknown>;
@@ -389,6 +710,7 @@ async function executePhaseAgent(
 
     case "SOLUTION_DESIGN": {
       const discovery = await getUpstreamContent(projectId, "DISCOVERY");
+      if (keplerContext) discovery._projectContext = keplerContext;
       const topology = await getUpstreamContent(projectId, "CURRENT_TOPOLOGY");
       const futureState = await getUpstreamContent(projectId, "DESIRED_FUTURE_STATE");
       const result = await runSolutionDesigner(projectId, projectName, topology, futureState, discovery);
@@ -404,6 +726,7 @@ async function executePhaseAgent(
       const topology = await getUpstreamContent(projectId, "CURRENT_TOPOLOGY");
       const solution = await getUpstreamContent(projectId, "SOLUTION_DESIGN");
       const discovery = await getUpstreamContent(projectId, "DISCOVERY");
+      if (keplerContext) discovery._projectContext = keplerContext;
       const result = await runInfrastructurePlanner(projectId, projectName, solution, topology, discovery);
       proposedJson = result.output as unknown as Record<string, unknown>;
       markdown = infrastructureToMarkdown(result.output);
@@ -415,6 +738,7 @@ async function executePhaseAgent(
 
     case "TEST_DESIGN": {
       const topology = await getUpstreamContent(projectId, "CURRENT_TOPOLOGY");
+      if (keplerContext) topology._projectContext = keplerContext;
       const solution = await getUpstreamContent(projectId, "SOLUTION_DESIGN");
       const result = await runTestDesigner(projectId, projectName, solution, topology);
       proposedJson = result.output as unknown as Record<string, unknown>;
@@ -427,9 +751,11 @@ async function executePhaseAgent(
 
     case "CRAFT_SOLUTION": {
       const topology = await getUpstreamContent(projectId, "CURRENT_TOPOLOGY");
+      if (keplerContext) topology._projectContext = keplerContext;
       const solution = await getUpstreamContent(projectId, "SOLUTION_DESIGN");
       const testDesign = await getUpstreamContent(projectId, "TEST_DESIGN");
-      const result = await runCraftSolution(projectId, projectName, solution, testDesign, topology);
+      const svcTemplate = await getServiceTemplateContext(projectId);
+      const result = await runCraftSolution(projectId, projectName, solution, testDesign, topology, svcTemplate);
       proposedJson = result.output as unknown as Record<string, unknown>;
       markdown = craftSolutionToMarkdown(result.output);
       aiRunIds = [result.aiRunId];
@@ -440,6 +766,7 @@ async function executePhaseAgent(
 
     case "TEST_SOLUTION": {
       const craft = await getUpstreamContent(projectId, "CRAFT_SOLUTION");
+      if (keplerContext) craft._projectContext = keplerContext;
       const testDesign = await getUpstreamContent(projectId, "TEST_DESIGN");
       const result = await runTestSolution(projectId, projectName, craft, testDesign);
       proposedJson = result.output as unknown as Record<string, unknown>;
@@ -455,7 +782,9 @@ async function executePhaseAgent(
       const craftSol = await getUpstreamContent(projectId, "CRAFT_SOLUTION");
       const topology = await getUpstreamContent(projectId, "CURRENT_TOPOLOGY");
       const discovery = await getUpstreamContent(projectId, "DISCOVERY");
-      const result = await runDeploymentPlanner(projectId, projectName, testSol, craftSol, topology, discovery);
+      if (keplerContext) discovery._projectContext = keplerContext;
+      const svcTemplate = await getServiceTemplateContext(projectId);
+      const result = await runDeploymentPlanner(projectId, projectName, testSol, craftSol, topology, discovery, svcTemplate);
       proposedJson = result.output as unknown as Record<string, unknown>;
       markdown = deploymentPlanToMarkdown(result.output);
       aiRunIds = [result.aiRunId];
@@ -464,27 +793,44 @@ async function executePhaseAgent(
       break;
     }
 
-    case "MONITORING": {
-      const deployment = await getUpstreamContent(projectId, "DEPLOYMENT_PLAN");
-      const solution = await getUpstreamContent(projectId, "SOLUTION_DESIGN");
-      const topology = await getUpstreamContent(projectId, "CURRENT_TOPOLOGY");
-      const testDesignContent = await getUpstreamContent(projectId, "TEST_DESIGN");
-      const result = await runMonitoringPlanner(projectId, projectName, deployment, solution, topology, testDesignContent);
-      proposedJson = result.output as unknown as Record<string, unknown>;
-      markdown = monitoringToMarkdown(result.output);
-      aiRunIds = [result.aiRunId];
-      assumptions = result.assumptions ?? [];
-      detectedBlockers = result.detectedBlockers ?? [];
+    case "MEETINGS":
+    case "WORKING_SESSIONS": {
+      const existing = await getUpstreamContent(projectId, phase);
+      const entries = (existing as Record<string, unknown>)?.entries;
+      proposedJson = {
+        entries: Array.isArray(entries) ? entries : [],
+        totalSessions: Array.isArray(entries) ? entries.length : 0,
+        lastSessionAt: Array.isArray(entries) && entries.length > 0
+          ? (entries[entries.length - 1] as Record<string, string>)?.date ?? null
+          : null,
+      };
+      markdown = `# ${phase === "MEETINGS" ? "Meetings" : "Working Sessions"}\n\n${
+        Array.isArray(entries) ? `${entries.length} transcript(s) ingested` : "No transcripts yet"
+      }`;
+      aiRunIds = [];
       break;
     }
 
-    case "ITERATION": {
-      const monitoring = await getUpstreamContent(projectId, "MONITORING");
-      const discovery = await getUpstreamContent(projectId, "DISCOVERY");
-      const topology = await getUpstreamContent(projectId, "CURRENT_TOPOLOGY");
-      const result = await runIterationPlanner(projectId, projectName, monitoring, discovery, topology);
+    case "BUILD_LOG": {
+      const allPhases: Phase[] = [
+        "DISCOVERY", "CURRENT_TOPOLOGY", "DESIRED_FUTURE_STATE",
+        "SOLUTION_DESIGN", "INFRASTRUCTURE", "TEST_DESIGN",
+        "CRAFT_SOLUTION", "TEST_SOLUTION", "DEPLOYMENT_PLAN",
+        "MEETINGS", "WORKING_SESSIONS",
+      ];
+      const upstreamSummaries: Record<string, unknown> = {};
+      for (const p of allPhases) {
+        upstreamSummaries[p] = await getUpstreamContent(projectId, p);
+      }
+      const existingBuildLog = await getUpstreamContent(projectId, "BUILD_LOG");
+      const result = await runBuildLogGenerator(
+        projectId,
+        projectName,
+        upstreamSummaries,
+        Object.keys(existingBuildLog).length > 0 ? existingBuildLog : undefined,
+      );
       proposedJson = result.output as unknown as Record<string, unknown>;
-      markdown = iterationToMarkdown(result.output);
+      markdown = buildLogToMarkdown(result.output);
       aiRunIds = [result.aiRunId];
       assumptions = result.assumptions ?? [];
       detectedBlockers = result.detectedBlockers ?? [];

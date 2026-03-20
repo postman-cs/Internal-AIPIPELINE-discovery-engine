@@ -67,11 +67,25 @@ describe("generatePatch", () => {
   it("handles null to value transition", () => {
     const ops = generatePatch(null, { a: 1 });
     expect(ops).toHaveLength(1);
-    expect(ops[0].op).toBe("add");
+    expect(ops[0].op).toBe("replace");
+    expect(ops[0].value).toEqual({ a: 1 });
   });
 
   it("handles value to null transition", () => {
     const ops = generatePatch({ a: 1 }, null);
+    expect(ops).toHaveLength(1);
+    expect(ops[0].op).toBe("replace");
+    expect(ops[0].value).toBeNull();
+  });
+
+  it("handles undefined to value transition as add", () => {
+    const ops = generatePatch(undefined, { a: 1 });
+    expect(ops).toHaveLength(1);
+    expect(ops[0].op).toBe("add");
+  });
+
+  it("handles value to undefined transition as remove", () => {
+    const ops = generatePatch({ a: 1 }, undefined);
     expect(ops).toHaveLength(1);
     expect(ops[0].op).toBe("remove");
   });

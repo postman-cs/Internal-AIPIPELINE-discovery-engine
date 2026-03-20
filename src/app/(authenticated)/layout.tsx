@@ -18,7 +18,7 @@ export default async function AuthenticatedLayout({
   return (
     <div className="min-h-screen" style={{ background: "var(--background)" }}>
       <Starfield />
-      <TopNav userName={session.name} isAdmin={session.isAdmin} />
+      <TopNav userName={session.name} userEmail={session.email} userRole={session.role} isAdmin={session.isAdmin} />
       <Breadcrumbs />
       <main className="relative z-10">{children}</main>
       <PianoAmbience />

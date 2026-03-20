@@ -13,7 +13,6 @@ const normalizeConfidence = (v: string) => {
   const cap = v.charAt(0).toUpperCase() + v.slice(1).toLowerCase();
   return (["High", "Medium", "Low"].includes(cap)) ? cap : "Medium";
 };
-const Confidence = z.string().transform(normalizeConfidence);
 
 // ---------------------------------------------------------------------------
 // Shared topology primitives
@@ -100,7 +99,7 @@ export const cloudResourceSchema = z.object({
   providerLabel: z.string().optional().default(""),
   service: z.string().optional().default(""),
   resourceType: z.string().optional().default(""),
-  topologyNodeId: z.string().optional(),
+  topologyNodeId: z.string().nullable().optional(),
   provisioningStatus: z.string().optional().default("planned"),
   configLanguage: z.string().optional().default("yaml"),
   evidenceIds: z.array(z.string()).optional().default([]),
@@ -126,7 +125,7 @@ export const containerManifestSchema = z.object({
   type: z.string().optional().default(""),
   filename: z.string().optional().default(""),
   content: z.string().optional().default(""),
-  targetService: z.string().optional(),
+  targetService: z.string().nullable().optional(),
 }).passthrough();
 
 export const secretsBlueprintItemSchema = z.object({
@@ -134,12 +133,25 @@ export const secretsBlueprintItemSchema = z.object({
   description: z.string().optional().default(""),
   required: z.boolean().optional().default(false),
   category: z.string().optional().default("application"),
-  platforms: z.array(z.object({
-    platform: z.string(),
-    platformLabel: z.string().optional().default(""),
-    configPath: z.string().optional().default(""),
-    configSnippet: z.string().optional(),
-  }).passthrough()).optional().default([]),
+  platforms: z.union([
+    z.array(z.object({
+      platform: z.string(),
+      platformLabel: z.string().optional().default(""),
+      configPath: z.string().optional().default(""),
+      configSnippet: z.string().optional(),
+    }).passthrough()),
+    z.record(z.unknown()).transform((obj) => {
+      return Object.entries(obj).map(([key, val]) => {
+        const v = (val && typeof val === "object" ? val : {}) as Record<string, unknown>;
+        return {
+          platform: v.platform as string ?? key,
+          platformLabel: (v.platformLabel as string) ?? "",
+          configPath: (v.configPath as string) ?? "",
+          configSnippet: v.configSnippet as string | undefined,
+        };
+      });
+    }),
+  ]).optional().default([]),
 }).passthrough();
 
 export const infrastructureOutputSchema = z.object({
@@ -205,7 +217,6 @@ export const newmanRunConfigSchema = z.object({
   description: z.string(),
   collectionRef: z.string(),       // references postmanCollections[].name
   environmentRef: z.string(),      // e.g. "staging", "production"
-  iterationCount: z.number().optional(),
   reporters: z.array(z.string()),  // ["cli","junit","htmlextra"]
   bailOnFailure: z.boolean(),
 });
@@ -416,46 +427,6 @@ export const monitoringOutputSchema = z.object({
 export type MonitoringOutput = z.infer<typeof monitoringOutputSchema>;
 
 // ---------------------------------------------------------------------------
-// 9. Iteration
-// ---------------------------------------------------------------------------
-
-export const iterationItemSchema = z.object({
-  id: z.string().optional().default(""),
-  title: z.string().optional().default(""),
-  type: z.string().optional().default(""),
-  priority: z.string().optional().default("Medium"),
-  description: z.string().optional().default(""),
-  targetComponentIds: z.array(z.string()).optional().default([]),
-  triggerSource: z.string().optional().default(""),
-  expectedOutcome: z.string().optional().default(""),
-  estimatedEffort: z.string().optional().default(""),
-  evidenceIds: z.array(z.string()).optional().default([]),
-  confidence: z.string().optional().default("Medium").transform(normalizeConfidence),
-}).passthrough();
-
-export const iterationOutputSchema = z.object({
-  backlogItems: z.array(iterationItemSchema),
-  priorityMatrix: z.object({
-    criticalPath: z.array(z.string()).optional().default([]),
-    quickWins: z.array(z.string()).optional().default([]),
-    strategicInvestments: z.array(z.string()).optional().default([]),
-    deferred: z.array(z.string()).optional().default([]),
-  }).optional().default({}),
-  driftAnalysis: z.object({
-    driftDetected: z.boolean().optional().default(false),
-    driftAreas: z.array(z.object({
-      area: z.string(),
-      description: z.string().optional().default(""),
-      severity: z.string().optional().default("Medium"),
-      evidenceIds: z.array(z.string()).optional().default([]),
-    }).passthrough()).optional().default([]),
-  }).optional().default({ driftDetected: false, driftAreas: [] }),
-  nextCycleRecommendation: z.string().optional().default(""),
-});
-
-export type IterationOutput = z.infer<typeof iterationOutputSchema>;
-
-// ---------------------------------------------------------------------------
 // Feature #13: Governance Rules Engine
 // ---------------------------------------------------------------------------
 
@@ -649,27 +620,31 @@ export const missileDesignSchema = z.object({
   targetAudience: z.string(),
   talkingPoints: z.array(z.object({
     point: z.string(),
-    supportingEvidence: z.string(),
+    supportingEvidence: z.string().optional(),
+    evidence: z.string().optional(),
     expectedObjection: z.string().optional(),
     rebuttal: z.string().optional(),
-  })),
+  }).passthrough().transform(({ evidence, ...rest }) => ({
+    ...rest,
+    supportingEvidence: rest.supportingEvidence || evidence || "",
+  }))),
   actionSteps: z.array(z.object({
-    order: z.number(),
+    order: z.number().optional().default(0),
     action: z.string(),
-    owner: z.string(),        // Who executes this step
+    owner: z.string().optional().default("SE"),
     deliverable: z.string().optional(),
-    timeline: z.string(),
-  })),
+    timeline: z.string().optional().default("TBD"),
+  }).passthrough()),
   deliverables: z.array(z.object({
-    type: z.string(),         // deck, demo, POC, document, email, meeting
+    type: z.string(),
     description: z.string(),
-    effort: z.string(),
-  })),
+    effort: z.string().optional().default("TBD"),
+  }).passthrough()).optional().default([]),
   estimatedEffort: z.string(),
   successCriteria: z.string(),
   fallbackPlan: z.string(),
-  probabilityOfSuccess: z.string(),
-});
+  probabilityOfSuccess: z.string().optional().default("medium"),
+}).passthrough();
 
 export type MissileDesign = z.infer<typeof missileDesignSchema>;
 
@@ -967,33 +942,3 @@ ${output.notes.map((n) => `- ${n}`).join("\n")}
 `;
 }
 
-export function iterationToMarkdown(output: IterationOutput): string {
-  const itemRows = output.backlogItems
-    .map((i) => `| ${i.title} | ${i.type} | ${i.priority} | ${i.triggerSource} | ${i.estimatedEffort} |`)
-    .join("\n");
-
-  return `# Iteration Plan
-
-## Backlog Items
-| Title | Type | Priority | Trigger | Effort |
-|-------|------|----------|---------|--------|
-${itemRows}
-
-## Priority Matrix
-### Critical Path
-${output.priorityMatrix.criticalPath.map((c) => `- ${c}`).join("\n") || "None"}
-
-### Quick Wins
-${output.priorityMatrix.quickWins.map((q) => `- ${q}`).join("\n") || "None"}
-
-### Strategic Investments
-${output.priorityMatrix.strategicInvestments.map((s) => `- ${s}`).join("\n") || "None"}
-
-## Drift Analysis
-${output.driftAnalysis.driftDetected ? "Drift detected:" : "No significant drift detected."}
-${output.driftAnalysis.driftAreas.map((d) => `- **${d.severity}**: ${d.area} — ${d.description}`).join("\n")}
-
-## Next Cycle Recommendation
-${output.nextCycleRecommendation}
-`;
-}

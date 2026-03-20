@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { loginSchema } from "@/lib/schemas";
+import { logAudit } from "@/lib/audit";
 import bcrypt from "bcryptjs";
 import { redirect } from "next/navigation";
 
@@ -34,14 +35,27 @@ export async function loginAction(_prev: unknown, formData: FormData) {
   session.userId = user.id;
   session.email = user.email;
   session.name = user.name;
-  session.isAdmin = user.isAdmin;
+  session.isAdmin = user.isAdmin || user.role === "ADMIRAL" || user.role === "ADMIN";
+  session.role = user.role;
   await session.save();
 
-  redirect(user.isAdmin ? "/admin" : "/dashboard");
+  logAudit({
+    userId: user.id,
+    action: "LOGIN",
+    metadata: { email: user.email },
+  }).catch(() => {});
+
+  redirect(user.role === "ADMIRAL" || user.role === "ADMIN" || user.isAdmin ? "/admiral" : "/dashboard");
 }
 
 export async function logoutAction() {
   const session = await getSession();
+  const userId = session.userId;
   session.destroy();
+
+  if (userId) {
+    logAudit({ userId, action: "LOGOUT" }).catch(() => {});
+  }
+
   redirect("/login");
 }

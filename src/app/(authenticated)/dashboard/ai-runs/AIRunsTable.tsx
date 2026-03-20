@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import Link from "next/link";
+import { getPaginatedAIRuns } from "@/lib/actions/discovery";
 
 type AIRunRow = {
   id: string;
@@ -17,6 +18,7 @@ type AIRunRow = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tokenUsage: any;
   durationMs: number | null;
+  citationAccuracy: number | null;
   status: string;
   createdAt: Date;
 };
@@ -35,9 +37,38 @@ const STATUS_COLORS: Record<string, { bg: string; text: string; pulse?: boolean 
   RUNNING: { bg: "rgba(245,158,11,0.1)", text: "#fbbf24", pulse: true },
 };
 
-export function AIRunsTable({ runs }: { runs: AIRunRow[] }) {
+const PAGE_SIZES = [25, 50, 100] as const;
+
+export function AIRunsTable({
+  initialRuns,
+  initialCursor,
+  initialHasMore,
+}: {
+  initialRuns: AIRunRow[];
+  initialCursor?: string;
+  initialHasMore: boolean;
+}) {
+  const [runs, setRuns] = useState<AIRunRow[]>(initialRuns);
+  const [cursor, setCursor] = useState<string | undefined>(initialCursor);
+  const [hasMore, setHasMore] = useState(initialHasMore);
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [loading, startLoading] = useTransition();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("ALL");
+
+  function handleLoadMore() {
+    if (!cursor || loading) return;
+    startLoading(async () => {
+      const result = await getPaginatedAIRuns(pageSize, cursor);
+      setRuns((prev) => [...prev, ...result.items]);
+      setCursor(result.nextCursor);
+      setHasMore(result.hasMore);
+    });
+  }
+
+  function handlePageSizeChange(newSize: number) {
+    setPageSize(newSize);
+  }
 
   const filteredRuns =
     filter === "ALL"
@@ -70,6 +101,7 @@ export function AIRunsTable({ runs }: { runs: AIRunRow[] }) {
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Status</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Duration</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Tokens</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Citations</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Prompt Hash</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--foreground-dim)" }}>Time</th>
               </tr>
@@ -87,7 +119,65 @@ export function AIRunsTable({ runs }: { runs: AIRunRow[] }) {
           </div>
         )}
       </div>
+
+      {/* Pagination Controls */}
+      <div className="flex items-center justify-between mt-4">
+        <div className="flex items-center gap-2">
+          <span className="text-xs" style={{ color: "var(--foreground-dim)" }}>
+            Showing {runs.length} runs
+          </span>
+          <span className="text-xs" style={{ color: "var(--foreground-dim)" }}>·</span>
+          <span className="text-xs" style={{ color: "var(--foreground-dim)" }}>Page size:</span>
+          {PAGE_SIZES.map((size) => (
+            <button
+              key={size}
+              onClick={() => handlePageSizeChange(size)}
+              className="text-xs px-2 py-1 rounded transition-colors"
+              style={{
+                background: pageSize === size ? "rgba(6,214,214,0.08)" : "transparent",
+                color: pageSize === size ? "var(--accent-cyan)" : "var(--foreground-dim)",
+                border: `1px solid ${pageSize === size ? "rgba(6,214,214,0.15)" : "var(--border)"}`,
+              }}
+            >
+              {size}
+            </button>
+          ))}
+        </div>
+
+        {hasMore && (
+          <button
+            onClick={handleLoadMore}
+            disabled={loading}
+            className="text-sm px-4 py-2 rounded-lg font-medium transition-all"
+            style={{
+              background: "rgba(6,214,214,0.08)",
+              color: "var(--accent-cyan)",
+              border: "1px solid rgba(6,214,214,0.15)",
+              opacity: loading ? 0.6 : 1,
+            }}
+          >
+            {loading ? "Loading..." : "Load More"}
+          </button>
+        )}
+      </div>
     </div>
+  );
+}
+
+function CitationBadge({ accuracy }: { accuracy: number | null }) {
+  if (accuracy === null) return <span className="text-xs" style={{ color: "var(--foreground-dim)" }}>—</span>;
+  const pct = Math.round(accuracy * 100);
+  const isLow = pct < 60;
+  return (
+    <span
+      className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
+      style={{
+        background: isLow ? "rgba(245,158,11,0.1)" : "rgba(16,185,129,0.1)",
+        color: isLow ? "#fbbf24" : "#34d399",
+      }}
+    >
+      {pct}%
+    </span>
   );
 }
 
@@ -136,6 +226,9 @@ function TableRow({ run, isExpanded, onToggle }: { run: AIRunRow; isExpanded: bo
         <td className="px-4 py-3 text-xs font-mono" style={{ color: "var(--foreground-muted)" }}>
           {tokens?.total ?? "—"}
         </td>
+        <td className="px-4 py-3">
+          <CitationBadge accuracy={run.citationAccuracy} />
+        </td>
         <td className="px-4 py-3 text-xs font-mono truncate max-w-[120px]" style={{ color: "var(--foreground-dim)" }}>
           {run.promptHash.slice(0, 12)}...
         </td>
@@ -146,7 +239,7 @@ function TableRow({ run, isExpanded, onToggle }: { run: AIRunRow; isExpanded: bo
 
       {isExpanded && (
         <tr>
-          <td colSpan={7} style={{ background: "var(--surface)", padding: "1rem" }}>
+          <td colSpan={8} style={{ background: "var(--surface)", padding: "1rem" }}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--foreground-dim)" }}>

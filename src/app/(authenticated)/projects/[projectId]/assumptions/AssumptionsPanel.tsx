@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useCallback, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 import {
   confirmAssumption,
   correctAssumptionAction,
@@ -10,6 +11,9 @@ import {
 } from "@/lib/actions/assumptions";
 import { useConfirm } from "@/components/shared";
 import { useToast } from "@/components/Toast";
+import { LazyCanvas } from "@/components/LazyCanvas";
+
+const SignalObservatory = dynamic(() => import("./SignalObservatory"), { ssr: false });
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Types
@@ -59,8 +63,29 @@ export function AssumptionsPanel({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [correctionId, setCorrectionId] = useState<string | null>(null);
   const [correctionText, setCorrectionText] = useState("");
+  const [selectedStarId, setSelectedStarId] = useState<string | null>(null);
+  const [verifyTargetId, setVerifyTargetId] = useState<string | null>(null);
+  const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const toast = useToast();
   const { confirm, ConfirmDialog } = useConfirm();
+
+  const handleObservatorySelect = useCallback((id: string | null) => {
+    setSelectedStarId(id);
+    if (id) {
+      setExpandedId(id);
+      setTimeout(() => {
+        const el = cardRefs.current.get(id);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 50);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedStarId) {
+      const timer = setTimeout(() => setSelectedStarId(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [selectedStarId]);
 
   const assumptions = initialData.assumptions ?? [];
   const summary = initialData.summary;
@@ -81,12 +106,17 @@ export function AssumptionsPanel({
   }
 
   function handleConfirm(id: string) {
+    setVerifyTargetId(id);
     startTransition(async () => {
       const r = await confirmAssumption(id);
       if ("error" in r && r.error) toast.error("Confirmation failed", r.error);
       else toast.success("Confirmed", "Assumption verified as correct");
     });
   }
+
+  const handleVerifyAnimComplete = useCallback(() => {
+    setVerifyTargetId(null);
+  }, []);
 
   function handleCorrect(id: string) {
     if (!correctionText.trim()) return;
@@ -122,6 +152,18 @@ export function AssumptionsPanel({
     });
   }
 
+  function handleVerifyAllPhases() {
+    startTransition(async () => {
+      let totalVerified = 0;
+      for (const phase of phases) {
+        const r = await bulkVerifyPhaseAction(projectId, phase as never);
+        if (r.success) totalVerified += r.verified ?? 0;
+      }
+      if (totalVerified > 0) toast.success("Bulk verified", `${totalVerified} assumptions verified across all phases`);
+      else toast.info("Nothing to verify", "No pending assumptions found");
+    });
+  }
+
   function handleResumeCascade() {
     startTransition(async () => {
       const r = await resumeCascadeAfterVerification(projectId);
@@ -151,15 +193,37 @@ export function AssumptionsPanel({
             Review AI assumptions to keep the pipeline on the golden path
           </p>
         </div>
-        {summary && summary.criticalPending.length === 0 && assumptions.length > 0 && (
-          <button onClick={handleResumeCascade} disabled={isPending} className="btn-cyan text-sm">
-            {isPending ? "Resuming..." : "Resume Cascade"}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {summary && summary.pending > 0 && (
+            <button onClick={handleVerifyAllPhases} disabled={isPending} className="btn-secondary text-sm">
+              {isPending ? "Verifying..." : `Verify All (${summary.pending})`}
+            </button>
+          )}
+          {summary && summary.criticalPending.length === 0 && assumptions.length > 0 && (
+            <button onClick={handleResumeCascade} disabled={isPending} className="btn-cyan text-sm">
+              {isPending ? "Resuming..." : "Resume Cascade"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Confirmation dialog */}
       <ConfirmDialog />
+
+      {/* Signal Observatory */}
+      {assumptions.length > 0 && (
+        <div className="mb-6">
+          <LazyCanvas>
+            <SignalObservatory
+              assumptions={assumptions}
+              onSelect={handleObservatorySelect}
+              selectedId={selectedStarId}
+              verifyTargetId={verifyTargetId}
+              onVerifyAnimComplete={handleVerifyAnimComplete}
+            />
+          </LazyCanvas>
+        </div>
+      )}
 
       {/* Summary stats */}
       {summary && (
@@ -265,8 +329,13 @@ export function AssumptionsPanel({
                 return (
                   <div
                     key={a.id}
+                    ref={(el) => { if (el) cardRefs.current.set(a.id, el); }}
                     className="rounded-xl transition-all duration-200"
-                    style={{ background: style.bg, border: `1px solid ${style.border}` }}
+                    style={{
+                      background: selectedStarId === a.id ? `${style.text}10` : style.bg,
+                      border: `1px solid ${selectedStarId === a.id ? style.text : style.border}`,
+                      boxShadow: selectedStarId === a.id ? `0 0 20px ${style.text}15` : "none",
+                    }}
                   >
                     {/* Main row */}
                     <div

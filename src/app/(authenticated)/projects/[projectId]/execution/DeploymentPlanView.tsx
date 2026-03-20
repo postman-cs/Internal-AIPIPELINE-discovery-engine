@@ -53,11 +53,20 @@ interface DeploymentPlanData {
   overallTimeline?: string;
   ciCdStages?: CiCdStage[];
   environmentPromotionGates?: PromotionGate[];
+  executedSteps?: number[];
 }
 
-export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
+interface DeploymentPlanViewProps {
+  data: DeploymentPlanData;
+  onExecuteStep?: (stepIndex: number, stepTitle: string) => void;
+  executingStep?: number | null;
+  executedSteps?: number[];
+}
+
+export function DeploymentPlanView({ data, onExecuteStep, executingStep, executedSteps: executedStepsProp }: DeploymentPlanViewProps) {
   const [expandedStep, setExpandedStep] = useState<number | null>(null);
   const [showSnippet, setShowSnippet] = useState<number | null>(null);
+  const executed = executedStepsProp ?? data.executedSteps ?? [];
 
   const steps = data.deploymentSteps ?? [];
   const stages = data.ciCdStages ?? [];
@@ -123,26 +132,45 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
             <div className="space-y-1">
               {steps.map((step, i) => {
                 const isExpanded = expandedStep === i;
+                const isExecuted = executed.includes(i);
+                const isExecuting = executingStep === i;
                 const title = step.title || step.name || `Step ${i + 1}`;
                 return (
                   <div key={i} className="relative pl-10">
                     {/* Node */}
                     <div
-                      className="absolute left-0 top-3 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold"
+                      className="absolute left-0 top-3 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold transition-all duration-300"
                       style={{
-                        background: "rgba(34,197,94,0.15)",
-                        border: "2px solid rgba(34,197,94,0.5)",
+                        background: isExecuted ? "rgba(34,197,94,0.3)" : "rgba(34,197,94,0.15)",
+                        border: `2px solid ${isExecuted ? "rgba(34,197,94,0.8)" : "rgba(34,197,94,0.5)"}`,
                         color: "#22c55e",
-                        boxShadow: isExpanded ? "0 0 12px rgba(34,197,94,0.3)" : "none",
+                        boxShadow: isExpanded
+                          ? "0 0 12px rgba(34,197,94,0.3)"
+                          : isExecuted
+                            ? "0 0 8px rgba(34,197,94,0.2)"
+                            : "none",
                       }}
                     >
-                      {i + 1}
+                      {isExecuted ? (
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                        </svg>
+                      ) : (
+                        i + 1
+                      )}
                     </div>
-                    <button
+                    <div
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setExpandedStep(isExpanded ? null : i)}
-                      className="w-full text-left rounded-lg p-3 transition-all duration-200"
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedStep(isExpanded ? null : i); } }}
+                      className="w-full text-left rounded-lg p-3 transition-all duration-200 cursor-pointer"
                       style={{
-                        background: isExpanded ? "rgba(34,197,94,0.04)" : "transparent",
+                        background: isExpanded
+                          ? "rgba(34,197,94,0.04)"
+                          : isExecuted
+                            ? "rgba(34,197,94,0.02)"
+                            : "transparent",
                         border: isExpanded
                           ? "1px solid rgba(34,197,94,0.15)"
                           : "1px solid transparent",
@@ -150,7 +178,14 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium" style={{ color: "var(--foreground)" }}>
+                          <span
+                            className="text-sm font-medium"
+                            style={{
+                              color: isExecuted ? "var(--foreground-muted)" : "var(--foreground)",
+                              textDecorationLine: isExecuted ? "line-through" : "none",
+                              textDecorationColor: isExecuted ? "rgba(34,197,94,0.3)" : undefined,
+                            }}
+                          >
                             {title}
                           </span>
                           {step.phase && (
@@ -161,12 +196,55 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
                               {step.phase}
                             </span>
                           )}
+                          {isExecuted && (
+                            <span
+                              className="text-[9px] px-1.5 py-0.5 rounded font-semibold"
+                              style={{ background: "rgba(34,197,94,0.1)", color: "#22c55e" }}
+                            >
+                              +25 XP
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
                           {step.estimatedDuration && (
                             <span className="text-[10px]" style={{ color: "var(--foreground-dim)" }}>
                               {step.estimatedDuration}
                             </span>
+                          )}
+                          {onExecuteStep && !isExecuted && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onExecuteStep(i, title);
+                              }}
+                              disabled={isExecuting}
+                              className="px-3 py-1 rounded-lg text-[10px] font-semibold uppercase tracking-wider transition-all duration-200 hover:scale-105 active:scale-95 disabled:opacity-50"
+                              style={{
+                                background: isExecuting
+                                  ? "rgba(34,197,94,0.2)"
+                                  : "linear-gradient(135deg, rgba(34,197,94,0.15), rgba(6,214,214,0.15))",
+                                color: "#22c55e",
+                                border: "1px solid rgba(34,197,94,0.3)",
+                                boxShadow: "0 0 10px rgba(34,197,94,0.08)",
+                              }}
+                            >
+                              {isExecuting ? (
+                                <span className="flex items-center gap-1">
+                                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                  </svg>
+                                  Launching...
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-1">
+                                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" />
+                                  </svg>
+                                  Execute
+                                </span>
+                              )}
+                            </button>
                           )}
                           <ChevronIcon open={isExpanded} />
                         </div>
@@ -176,7 +254,7 @@ export function DeploymentPlanView({ data }: { data: DeploymentPlanData }) {
                           {step.description}
                         </p>
                       )}
-                    </button>
+                    </div>
                     {isExpanded && (
                       <div className="px-3 pb-3 space-y-3 animate-in">
                         {step.description && (

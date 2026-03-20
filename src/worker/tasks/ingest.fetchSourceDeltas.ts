@@ -25,9 +25,10 @@ const task: Task = async (_payload, helpers) => {
 
   logger.info(`Found ${configs.length} enabled source configs`);
 
+  const { PRIORITY } = await import("@/worker/index");
+
   for (const config of configs) {
     for (const project of config.user.projects) {
-      // Enqueue normalization for each project-source pair
       await addJob("ingest.normalizePersist", {
         projectId: project.id,
         userId: config.userId,
@@ -36,6 +37,7 @@ const task: Task = async (_payload, helpers) => {
       }, {
         maxAttempts: 3,
         queueName: `ingest-${project.id}`,
+        priority: PRIORITY.NORMAL,
       });
     }
   }

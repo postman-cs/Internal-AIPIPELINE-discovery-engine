@@ -36,7 +36,8 @@ OUTPUT: Return JSON:
 export async function runCurrentTopologyBuilder(
   projectId: string,
   projectName: string,
-  discoveryContent: Record<string, unknown>
+  discoveryContent: Record<string, unknown>,
+  serviceTemplateContext?: string | null
 ): Promise<{ output: CurrentTopologyOutput; aiRunId: string; assumptions: AssumptionItem[]; detectedBlockers: BlockerDetection[] }> {
   const evidence = await retrieveMultiQueryEvidence(projectId, [
     `${projectName} API architecture services microservices`,
@@ -66,7 +67,7 @@ Public Footprint: ${JSON.stringify(publicFoot)}
 === EVIDENCE ===
 ${evidenceBlock}
 === END EVIDENCE ===
-
+${serviceTemplateContext ? `\n${serviceTemplateContext}\n\nUse the service template above to identify real API endpoints, services, and their relationships. This is the customer's actual service definition.\n` : ""}
 Produce the topology graph JSON. Only reference evidence IDs from the list above.`;
 
   const result = await runAgent({

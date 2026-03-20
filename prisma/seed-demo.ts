@@ -18,17 +18,20 @@ async function main() {
   const passwordHash = await bcrypt.hash("pipeline123", 10);
   const user = await prisma.user.upsert({
     where: { email: "cse@postman.com" },
-    update: {},
+    update: { name: "CSE Demo User", role: "CSE" },
     create: {
       email: "cse@postman.com",
       name: "CSE Demo User",
       passwordHash,
-      isAdmin: true,
+      role: "CSE",
     },
   });
   console.log(`✓ User: ${user.email} (${user.id})`);
 
   // ─── 2. Clean up old demo data ────────────────────────────────────
+  // Delete admiral notes/tasks tied to this project (cascades via project, but clean explicit)
+  await prisma.admiralTask.deleteMany({ where: { projectId: DEMO_PROJECT_ID } });
+  await prisma.admiralNote.deleteMany({ where: { projectId: DEMO_PROJECT_ID } });
   // Delete project (cascades most relations)
   await prisma.project.deleteMany({ where: { id: DEMO_PROJECT_ID } });
   // Clean up orphaned demo ingest data (not project-cascaded)
@@ -44,13 +47,203 @@ async function main() {
       primaryDomain: "globalbank.com",
       apiDomain: "api.globalbank.com",
       publicWorkspaceUrl: "https://www.postman.com/globalbank/workspace/globalbank-public-apis",
+      customerContactName: "Marcus Johnson (API Platform Lead)",
+      customerContactEmail: "marcus.j@globalbank.com",
       ownerUserId: user.id,
       isPinned: true,
+      engagementStage: 5, // POV In Progress
       gitProvider: "github",
-      gitRepoOwner: "globalbank",
-      gitRepoName: "api-platform",
+      gitRepoOwner: "postman-cs",
+      gitRepoName: "globalbank-onboarding",
       gitBaseBranch: "main",
+      lastRepoPushAt: new Date(Date.now() - 2 * 86400_000),
+      lastRepoPrUrl: "https://github.com/postman-cs/globalbank-onboarding/pull/1",
+      lastRepoPrNumber: 1,
       postmanWorkspaceId: "ws-demo-globalbank-12345",
+      serviceTemplateContent: `openapi: "3.0.3"
+info:
+  title: GlobalBank Payments API
+  version: 2.1.0
+  description: Payment processing and transaction management for GlobalBank Financial Services
+  contact:
+    name: API Platform Team
+    email: api-platform@globalbank.com
+servers:
+  - url: https://api.globalbank.com/v2
+    description: Production
+  - url: https://api-staging.globalbank.com/v2
+    description: Staging
+  - url: https://api-dev.globalbank.com/v2
+    description: Development
+security:
+  - OAuth2: [payments.read, payments.write]
+  - ApiKey: []
+paths:
+  /payments:
+    get:
+      operationId: listPayments
+      summary: List payments
+      tags: [Payments]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, processing, completed, failed]
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        "200":
+          description: Paginated list of payments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Payment" } }
+                  pagination: { $ref: "#/components/schemas/Pagination" }
+    post:
+      operationId: createPayment
+      summary: Initiate a new payment
+      tags: [Payments]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePaymentRequest" }
+      responses:
+        "201":
+          description: Payment created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+  /payments/{paymentId}:
+    get:
+      operationId: getPayment
+      summary: Get payment details
+      tags: [Payments]
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Payment details
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+  /payments/{paymentId}/status:
+    patch:
+      operationId: updatePaymentStatus
+      summary: Update payment status
+      tags: [Payments]
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [processing, completed, failed] }
+                reason: { type: string }
+      responses:
+        "200":
+          description: Status updated
+  /accounts/{accountId}/balance:
+    get:
+      operationId: getAccountBalance
+      summary: Get account balance
+      tags: [Accounts]
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Account balance
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountBalance" }
+  /transfers:
+    post:
+      operationId: initiateTransfer
+      summary: Initiate wire transfer
+      tags: [Transfers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TransferRequest" }
+      responses:
+        "202":
+          description: Transfer accepted for processing
+components:
+  schemas:
+    Payment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        amount: { type: number, format: double }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
+        status: { type: string, enum: [pending, processing, completed, failed] }
+        fromAccount: { type: string }
+        toAccount: { type: string }
+        createdAt: { type: string, format: date-time }
+    CreatePaymentRequest:
+      type: object
+      required: [amount, currency, fromAccount, toAccount]
+      properties:
+        amount: { type: number, minimum: 0.01 }
+        currency: { type: string }
+        fromAccount: { type: string }
+        toAccount: { type: string }
+        memo: { type: string, maxLength: 256 }
+    AccountBalance:
+      type: object
+      properties:
+        accountId: { type: string }
+        available: { type: number }
+        pending: { type: number }
+        currency: { type: string }
+    TransferRequest:
+      type: object
+      required: [amount, currency, sourceAccount, destinationAccount, network]
+      properties:
+        amount: { type: number }
+        currency: { type: string }
+        sourceAccount: { type: string }
+        destinationAccount: { type: string }
+        network: { type: string, enum: [SWIFT, ACH, FEDWIRE] }
+    Pagination:
+      type: object
+      properties:
+        total: { type: integer }
+        page: { type: integer }
+        perPage: { type: integer }
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.globalbank.com/oauth/token
+          scopes:
+            payments.read: Read payment data
+            payments.write: Create and modify payments
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key`,
+      serviceTemplateType: "openapi",
+      serviceTemplateFileName: "globalbank-payments-api-v2.yaml",
+      serviceTemplateNotes: "Obtained from Marcus Johnson during Call 1. Covers Payments, Accounts, and Transfers services. Auth via OAuth2 client credentials or API key.",
       governanceRulesJson: {
         requiredHeaders: ["X-Request-ID", "X-Correlation-ID"],
         maxResponseTimeMs: 500,
@@ -60,7 +253,7 @@ async function main() {
       },
     },
   });
-  console.log(`✓ Project: ${project.name}`);
+  console.log(`✓ Project: ${project.name} (engagement stage 5, service template loaded)`);
 
   // ─── 4. IngestSourceConfig ─────────────────────────────────────────
   const sources = ["KEPLER", "DNS", "MANUAL", "GITHUB"];
@@ -344,8 +537,7 @@ GlobalBank is a Fortune 500 financial institution undergoing API platform modern
     "CRAFT_SOLUTION",
     "TEST_SOLUTION",
     "DEPLOYMENT_PLAN",
-    "MONITORING",
-    "ITERATION",
+    "BUILD_LOG",
   ] as const;
 
   const phaseContents: Record<string, { json: object; markdown: string; status: string }> = {
@@ -425,36 +617,148 @@ GlobalBank is a Fortune 500 financial institution undergoing API platform modern
         environments: ["dev", "staging", "production"],
         secrets: "HashiCorp Vault → Postman API keys via CI variables",
         monitoring: "Newman results → Datadog dashboards",
+        deploymentTargets: [
+          { env: "dev", url: "https://api-dev.globalbank.com/v2", provider: "EKS us-east-1", autoDeployOnMerge: true },
+          { env: "staging", url: "https://api-staging.globalbank.com/v2", provider: "EKS us-east-1", autoDeployOnMerge: false },
+          { env: "production", url: "https://api.globalbank.com/v2", provider: "EKS us-east-1 (blue/green)", autoDeployOnMerge: false },
+        ],
       },
-      markdown: "# Infrastructure\nGitHub Actions + Newman. Vault for secrets. Datadog for monitoring. 3 environments.",
-      status: "NEEDS_REVIEW",
+      markdown: "# Infrastructure\nGitHub Actions + Newman. Vault for secrets. Datadog for monitoring. 3 environments. Blue/green production deploy.",
+      status: "CLEAN",
     },
     TEST_DESIGN: {
       json: {
         strategy: "Contract-first testing with Postman collections as source of truth",
         layers: ["Unit (Jest/Mocha)", "Integration (Newman)", "Contract (Postman)", "E2E (Newman + environments)"],
         coverage: { current: 62, target: 90 },
+        contractTestingApproach: "OpenAPI spec as contract. Newman validates response schema, headers, status codes. Pact for consumer-driven contracts between internal services.",
       },
-      markdown: "# Test Design\nContract-first strategy. Current coverage 62%, target 90%. Four testing layers defined.",
-      status: "DIRTY",
+      markdown: "# Test Design\nContract-first strategy. Current coverage 62%, target 90%. Four testing layers defined. Pact for consumer-driven contracts.",
+      status: "CLEAN",
     },
     CRAFT_SOLUTION: {
       json: {
-        collections: ["Payments API v2", "Accounts API v1", "Auth Flow Tests", "Smoke Tests"],
-        environments: ["Dev", "Staging", "Production"],
-        mockServers: ["SWIFT Network Mock", "External Payment Processor Mock"],
+        implementationPlan: [
+          { step: 1, title: "Onboard Payments API spec into Postman", description: "Import the OpenAPI 3.0 spec, generate baseline collection", targetComponents: ["n5"], evidenceIds: ["EVIDENCE-16"] },
+          { step: 2, title: "Create Newman CI pipeline", description: "GitHub Actions workflow running contract + smoke tests", targetComponents: ["n5", "n6"], evidenceIds: ["EVIDENCE-18"] },
+          { step: 3, title: "Set up mock servers for SWIFT", description: "Mock external SWIFT network dependency for local dev + CI", targetComponents: ["n16"], evidenceIds: ["EVIDENCE-5"] },
+          { step: 4, title: "Deploy environment promotion gates", description: "Dev → Staging → Production with Newman gates", targetComponents: ["n4", "n5"], evidenceIds: ["EVIDENCE-8"] },
+        ],
+        migrationSteps: ["Export existing curl-based tests to Postman collection format", "Migrate environment variables from .env files to Postman environments"],
+        ciCdNotes: ["All pipelines require POSTMAN_API_KEY secret", "Newman v6+ required for JUnit reporter"],
+        estimatedEffort: "M (2 weeks for pilot team)",
+        postmanCollections: [
+          { name: "Payments API v2 — Contract Tests", description: "Contract tests for all Payments API endpoints", folders: [
+            { name: "Payments", requests: [
+              { method: "GET", name: "List Payments", urlPattern: "{{baseUrl}}/payments?status=completed&limit=20", description: "List payments with status filter" },
+              { method: "POST", name: "Create Payment", urlPattern: "{{baseUrl}}/payments", description: "Initiate a new payment" },
+              { method: "GET", name: "Get Payment by ID", urlPattern: "{{baseUrl}}/payments/{{paymentId}}", description: "Retrieve payment details" },
+              { method: "PATCH", name: "Update Payment Status", urlPattern: "{{baseUrl}}/payments/{{paymentId}}/status", description: "Update payment status" },
+            ]},
+            { name: "Accounts", requests: [
+              { method: "GET", name: "Get Account Balance", urlPattern: "{{baseUrl}}/accounts/{{accountId}}/balance", description: "Check account balance" },
+            ]},
+            { name: "Transfers", requests: [
+              { method: "POST", name: "Initiate Wire Transfer", urlPattern: "{{baseUrl}}/transfers", description: "Initiate SWIFT/ACH/FEDWIRE transfer" },
+            ]},
+          ]},
+          { name: "Payments API v2 — Smoke Tests", description: "Quick health-check smoke tests for each environment", folders: [
+            { name: "Health", requests: [
+              { method: "GET", name: "Health Check", urlPattern: "{{baseUrl}}/health", description: "Basic health check" },
+              { method: "GET", name: "List Payments (smoke)", urlPattern: "{{baseUrl}}/payments?limit=1", description: "Verify API responds" },
+            ]},
+          ]},
+          { name: "Auth Flow Validation", description: "OAuth2 token flow + API key validation tests", folders: [
+            { name: "OAuth2", requests: [
+              { method: "POST", name: "Get Access Token", urlPattern: "{{authUrl}}/oauth/token", description: "Client credentials grant" },
+              { method: "GET", name: "Token Introspect", urlPattern: "{{authUrl}}/oauth/introspect", description: "Validate token" },
+            ]},
+          ]},
+        ],
+        newmanRunConfigs: [
+          { name: "contract-tests-dev", description: "Contract tests against Dev environment", collectionRef: "Payments API v2 — Contract Tests", environmentRef: "Dev", reporters: ["cli", "junit"], bailOnFailure: true },
+          { name: "contract-tests-staging", description: "Contract tests against Staging", collectionRef: "Payments API v2 — Contract Tests", environmentRef: "Staging", reporters: ["cli", "junit", "htmlextra"], bailOnFailure: true },
+          { name: "smoke-tests-prod", description: "Production smoke tests", collectionRef: "Payments API v2 — Smoke Tests", environmentRef: "Production", reporters: ["cli", "junit"], bailOnFailure: false },
+          { name: "auth-flow-dev", description: "Auth flow validation in Dev", collectionRef: "Auth Flow Validation", environmentRef: "Dev", reporters: ["cli"], bailOnFailure: true },
+        ],
+        ciCdPipelines: [
+          { platform: "github_actions", platformLabel: "GitHub Actions", configLanguage: "yaml", filename: ".github/workflows/postman-tests.yml", description: "Full Newman test suite on push to main", configContent: `name: Postman API Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  contract-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install -g newman newman-reporter-htmlextra
+      - name: Run Contract Tests (Dev)
+        run: |
+          newman run postman/collections/payments-contract.json \\
+            -e postman/environments/dev.json \\
+            --reporters cli,junit \\
+            --reporter-junit-export results/contract-dev.xml \\
+            --bail
+        env:
+          POSTMAN_API_KEY: \${{ secrets.POSTMAN_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: results/` },
+          { platform: "github_actions", platformLabel: "GitHub Actions", configLanguage: "yaml", filename: ".github/workflows/postman-promotion.yml", description: "Environment promotion pipeline with Newman gates", configContent: `name: Environment Promotion
+on:
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: Target environment
+        required: true
+        type: choice
+        options: [staging, production]
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install -g newman
+      - name: Newman Gate Check
+        run: |
+          newman run postman/collections/payments-contract.json \\
+            -e postman/environments/\${{ inputs.target_env }}.json \\
+            --bail
+      - name: Deploy
+        if: success()
+        run: echo "Deploying to \${{ inputs.target_env }}"` },
+        ],
       },
-      markdown: "# Craft Solution\n4 collections drafted. 3 environments configured. 2 mock servers for external dependencies.",
-      status: "DIRTY",
+      markdown: "# Craft Solution\n3 collections (contract, smoke, auth). 4 Newman configs. 2 GitHub Actions pipelines. Mock servers for SWIFT dependency.",
+      status: "CLEAN",
     },
     TEST_SOLUTION: {
       json: {
-        newmanResults: { total: 156, passed: 142, failed: 14, skipped: 0 },
-        coverageImprovement: "62% → 78% in pilot",
-        blockers: ["SWIFT mock incomplete", "Staging env auth token rotation"],
+        newmanResults: { total: 156, passed: 151, failed: 5, skipped: 0 },
+        coverageImprovement: "62% → 84% in pilot",
+        failingSummary: [
+          { test: "SWIFT Transfer - timeout on settlement confirmation", severity: "low", notes: "Intermittent mock latency, non-blocking" },
+          { test: "Auth token refresh race condition", severity: "medium", notes: "Okta token refresh window edge case" },
+        ],
+        ciRunHistory: [
+          { date: "2026-01-22", passed: 128, failed: 28, duration: 12500 },
+          { date: "2026-01-25", passed: 140, failed: 16, duration: 8900 },
+          { date: "2026-01-29", passed: 148, failed: 8, duration: 6200 },
+          { date: "2026-02-03", passed: 151, failed: 5, duration: 4800 },
+        ],
       },
-      markdown: "# Test Solution\n156 tests, 91% passing. Coverage improved from 62% to 78% in pilot. 2 blockers identified.",
-      status: "STALE",
+      markdown: "# Test Solution\n156 tests, 97% passing (151/156). Coverage 62% → 84%. 5 remaining failures are low/medium severity. CI run time improved from 12.5s → 4.8s over 2 weeks.",
+      status: "CLEAN_WITH_EXCEPTIONS",
     },
     DEPLOYMENT_PLAN: {
       json: {
@@ -465,23 +769,99 @@ GlobalBank is a Fortune 500 financial institution undergoing API platform modern
       markdown: "# Deployment Plan\n4-wave rollout over 18 weeks. Feature flags for gradual enforcement. PR checks required.",
       status: "CLEAN",
     },
-    MONITORING: {
+    BUILD_LOG: {
       json: {
-        dashboards: ["API Health Overview", "Newman CI Results", "Collection Coverage", "Team Adoption Metrics"],
-        alerts: ["Test failure rate > 10%", "New API without collection", "Stale collection > 30 days"],
-        reporting: "Weekly executive summary auto-generated",
+        context: {
+          aeCse: "CSE Demo User",
+          customerTechnicalLead: "Marcus Johnson (API Platform Lead)",
+          sprintDates: "Jan 20 – Feb 7, 2026",
+          accountExecutive: "Lisa Chen",
+          customerOrg: "GlobalBank Financial Services",
+          engagementType: "Technical POV",
+        },
+        hypothesis: "By deploying Postman collections with Newman CI gates across GlobalBank's Payments API pipeline, we can reduce manual API testing effort by 40% (from ~3 hrs/week per developer to <2 hrs/week), improve test coverage from 62% to 80%+, and establish a reusable pattern that can scale to all 47 microservices.",
+        successCriteria: [
+          "Newman running in CI for Payments API on every push to main",
+          "Contract test coverage ≥ 80% for all Payments endpoints",
+          "SWIFT mock server operational for dev + CI environments",
+          "Environment promotion gates enforced (Dev → Staging → Prod)",
+          "Payments team developers actively using Postman (≥ 6 of 8 team members)",
+        ],
+        environmentBaseline: {
+          scm: "GitHub Enterprise",
+          ciCd: "GitHub Actions",
+          gateway: "Kong Gateway 3.4",
+          cloud: "AWS (EKS, RDS, SQS, S3)",
+          devPortal: "Backstage on EKS",
+          currentPostmanUsage: "Minimal — 12 stale collections in a public workspace, no environments, no CI integration",
+          version: "Postman v11 (free tier)",
+          identityProvider: "Okta (OIDC/SAML)",
+          secretsManagement: "HashiCorp Vault",
+          observability: "Datadog APM + Logging",
+        },
+        whatWeBuilt: [
+          "Payments API v2 Contract Test Collection — 6 endpoints, 128 assertions covering happy path, error cases, and schema validation",
+          "Payments API v2 Smoke Test Collection — lightweight health checks for each environment",
+          "Auth Flow Validation Collection — OAuth2 client credentials + token introspect tests",
+          "3 Postman Environments (Dev, Staging, Production) with Vault-backed secrets",
+          "GitHub Actions workflow: postman-tests.yml — runs full Newman contract suite on push/PR",
+          "GitHub Actions workflow: postman-promotion.yml — environment promotion with Newman gates",
+          "SWIFT Network Mock Server — simulates ISO 20022 wire transfer responses for local dev and CI",
+          "Newman CI Reporter Configuration — JUnit + HTML Extra reporters for artifact archiving",
+        ],
+        valueUnlocked: [
+          "40% reduction in manual API testing time for Payments team (confirmed: 3.1 hrs → 1.8 hrs/week/dev)",
+          "Test coverage improved from 62% → 84% for Payments API endpoints",
+          "CI feedback loop reduced from 8 minutes (Jest/Mocha) to 2.5 minutes (Newman contract tests)",
+          "Zero production incidents related to Payments API since Newman gate deployment",
+          "Developer NPS for API testing workflow improved from 3.2 to 7.8 (out of 10)",
+        ],
+        reusablePatterns: [
+          "Vault-to-Newman secret injection pattern — reusable across all 47 microservices",
+          "Environment promotion gate template — adaptable for any API service with Newman",
+          "Mock server scaffolding for external dependencies — pattern documented for SWIFT, usable for any external API",
+          "Collection-as-code Git workflow — collections stored in repo, synced via Postman API",
+        ],
+        productGapsRisks: [
+          "Postman collection sync doesn't handle merge conflicts well when multiple developers edit simultaneously",
+          "Newman reporter ecosystem is fragmented — htmlextra reporter not officially maintained",
+          "No native Vault integration in Postman desktop — workaround via CI env vars only",
+          "gRPC support still in beta — blocker for Trading team adoption in Wave 3",
+        ],
+        nextSteps: [
+          "Wave 2 kickoff: Replicate pattern for Core Banking API team (5 teams, target: 4 weeks)",
+          "Security review with James Wright — demo Vault integration POC (scheduled Tuesday)",
+          "Create comparison matrix for evaluation committee (Postman vs Insomnia, due Thursday)",
+          "Prepare ROI dashboard for Sarah Chen's executive review",
+          "Draft enterprise license proposal based on pilot metrics",
+        ],
       },
-      markdown: "# Monitoring\n4 dashboards. 3 alert rules. Weekly auto-generated executive reports.",
+      markdown: `# Build Log — GlobalBank Financial Services
+
+## Context
+**AE/CSE:** CSE Demo User | **Customer Lead:** Marcus Johnson | **Sprint:** Jan 20 – Feb 7, 2026
+
+## Hypothesis
+Deploying Postman + Newman across Payments API will reduce manual testing 40%, improve coverage to 80%+.
+
+## What We Built
+- 3 Postman Collections (contract, smoke, auth) with 128+ assertions
+- 3 Environments (Dev/Staging/Prod) with Vault-backed secrets
+- 2 GitHub Actions pipelines (test + promotion)
+- SWIFT mock server for external dependency isolation
+
+## Value Unlocked
+- **40% testing time reduction** (3.1 → 1.8 hrs/week/dev)
+- **84% test coverage** (up from 62%)
+- **2.5 min CI feedback** (down from 8 min)
+- **Zero production incidents** since deployment
+
+## Reusable Patterns
+- Vault→Newman secret injection | Environment promotion gates | Mock server scaffolding | Collection-as-code workflow
+
+## Next Steps
+Wave 2 kickoff, security review, evaluation committee, executive ROI dashboard`,
       status: "CLEAN",
-    },
-    ITERATION: {
-      json: {
-        cadence: "Bi-weekly retrospectives",
-        feedbackChannels: ["Slack #api-testing", "Monthly survey", "Team lead 1:1s"],
-        improvementBacklog: ["Add contract testing layer", "GraphQL collection support", "Performance testing integration"],
-      },
-      markdown: "# Iteration\nBi-weekly retros. 3 feedback channels. 3-item improvement backlog.",
-      status: "DIRTY",
     },
   };
 
@@ -880,205 +1260,7 @@ GlobalBank is a Fortune 500 financial institution undergoing API platform modern
   }
   console.log("✓ 5 NewmanTestResults");
 
-  // ─── 20. AdoptionWaves ─────────────────────────────────────────────
-  const wave1 = await prisma.adoptionWave.create({
-    data: {
-      id: id("wave-1"),
-      projectId: project.id,
-      waveNumber: 1,
-      name: "Pilot Wave — Payments Team",
-      description: "Initial pilot with the highest-urgency team. Prove ROI and establish patterns.",
-      status: "COMPLETED",
-      plannedStartDate: new Date(Date.now() - 30 * 86400_000),
-      plannedEndDate: new Date(Date.now() - 16 * 86400_000),
-      actualStartDate: new Date(Date.now() - 28 * 86400_000),
-      actualEndDate: new Date(Date.now() - 14 * 86400_000),
-      gateCleared: true,
-      gateClearedAt: new Date(Date.now() - 30 * 86400_000),
-      gateClearedBy: user.id,
-      goNoGoGateJson: { criteria: ["Champion identified", "Budget confirmed", "Security pre-approval"], allMet: true },
-      targetTeamCount: 2,
-      targetUserCount: 15,
-      targetCollections: 4,
-      targetCiPipelines: 2,
-      actualTeamCount: 2,
-      actualUserCount: 18,
-      actualCollections: 6,
-      actualCiPipelines: 3,
-    },
-  });
-
-  const wave2 = await prisma.adoptionWave.create({
-    data: {
-      id: id("wave-2"),
-      projectId: project.id,
-      waveNumber: 2,
-      name: "Early Adopters — Core Banking & Platform",
-      description: "Expand to core banking and platform teams. Leverage pilot learnings.",
-      status: "IN_PROGRESS",
-      plannedStartDate: new Date(Date.now() - 7 * 86400_000),
-      plannedEndDate: new Date(Date.now() + 21 * 86400_000),
-      actualStartDate: new Date(Date.now() - 5 * 86400_000),
-      goNoGoGateJson: { criteria: ["Pilot ROI > 30%", "Security blocker resolved", "Onboarding playbook ready"], allMet: true },
-      gateCleared: true,
-      gateClearedAt: new Date(Date.now() - 7 * 86400_000),
-      targetTeamCount: 8,
-      targetUserCount: 60,
-      targetCollections: 20,
-      targetCiPipelines: 8,
-      actualTeamCount: 3,
-      actualUserCount: 22,
-      actualCollections: 8,
-      actualCiPipelines: 3,
-    },
-  });
-
-  const wave3 = await prisma.adoptionWave.create({
-    data: {
-      id: id("wave-3"),
-      projectId: project.id,
-      waveNumber: 3,
-      name: "Majority — All Backend Teams",
-      description: "Rollout to remaining 18 backend teams with standardized playbooks.",
-      status: "PLANNED",
-      plannedStartDate: new Date(Date.now() + 28 * 86400_000),
-      plannedEndDate: new Date(Date.now() + 84 * 86400_000),
-      targetTeamCount: 18,
-      targetUserCount: 200,
-      targetCollections: 60,
-      targetCiPipelines: 25,
-    },
-  });
-  console.log("✓ 3 AdoptionWaves (completed, in-progress, planned)");
-
-  // ─── 21. AdoptionTeams ─────────────────────────────────────────────
-  const teams = [
-    { name: "Payments API Team", dept: "Engineering", size: 8, lead: "Alex Rivera", email: "alex.r@globalbank.com", wave: wave1.id, stage: "champion", score: 92, champion: "Alex Rivera", ciPlatform: "github_actions", lang: "Java", collections: 4, tests: 128, pipelines: 2, users: 8, newman: 12, resistance: "none" },
-    { name: "Transaction Processing", dept: "Engineering", size: 6, lead: "Priya Sharma", email: "priya.s@globalbank.com", wave: wave1.id, stage: "adopted", score: 78, champion: "Priya Sharma", ciPlatform: "github_actions", lang: "Java", collections: 2, tests: 89, pipelines: 1, users: 6, newman: 8, resistance: "low" },
-    { name: "Core Banking API", dept: "Engineering", size: 10, lead: "David Kim", email: "david.k@globalbank.com", wave: wave2.id, stage: "piloting", score: 45, ciPlatform: "github_actions", lang: "Java", collections: 2, tests: 32, pipelines: 1, users: 4, newman: 3, resistance: "low" },
-    { name: "Platform Infrastructure", dept: "Platform", size: 7, lead: "Sam Torres", email: "sam.t@globalbank.com", wave: wave2.id, stage: "evaluating", score: 30, ciPlatform: "github_actions", lang: "Node.js", collections: 1, tests: 18, pipelines: 0, users: 2, newman: 0, resistance: "medium", resistanceNotes: "Team prefers curl scripts and custom test harness" },
-    { name: "Auth & Identity", dept: "Platform", size: 5, lead: "Jordan Lee", email: "jordan.l@globalbank.com", wave: wave2.id, stage: "aware", score: 15, ciPlatform: "github_actions", lang: "Node.js", collections: 0, tests: 0, pipelines: 0, users: 0, newman: 0, resistance: "medium", resistanceNotes: "Concerned about secret management in shared collections" },
-    { name: "Analytics & Reporting", dept: "Data", size: 12, lead: "Chen Wei", email: "chen.w@globalbank.com", wave: wave3.id, stage: "unaware", score: 0, ciPlatform: "github_actions", lang: "Python", collections: 0, tests: 0, pipelines: 0, users: 0, newman: 0, resistance: "none" },
-    { name: "Trading Systems", dept: "Trading", size: 15, lead: "Michael Brown", email: "michael.b@globalbank.com", wave: wave3.id, stage: "evaluating", score: 20, ciPlatform: "github_actions", lang: "C++", collections: 0, tests: 0, pipelines: 0, users: 1, newman: 0, resistance: "high", resistanceNotes: "Strongly prefer Insomnia for gRPC support. Team lead is vocal opponent." },
-    { name: "Mobile Backend", dept: "Engineering", size: 6, lead: "Emily Zhang", email: "emily.z@globalbank.com", wave: wave3.id, stage: "unaware", score: 0, ciPlatform: "github_actions", lang: "Node.js", collections: 0, tests: 0, pipelines: 0, users: 0, newman: 0, resistance: "none" },
-  ];
-
-  for (const t of teams) {
-    await prisma.adoptionTeam.create({
-      data: {
-        projectId: project.id,
-        waveId: t.wave,
-        name: t.name,
-        department: t.dept,
-        teamSize: t.size,
-        teamLead: t.lead,
-        teamLeadEmail: t.email,
-        readinessScore: Math.min(100, t.score + 10),
-        adoptionStage: t.stage,
-        adoptionScore: t.score,
-        ciPlatform: t.ciPlatform,
-        primaryLanguage: t.lang,
-        existingTools: t.lang === "C++" ? ["Insomnia", "gRPC tools", "custom harness"] : t.lang === "Python" ? ["requests", "pytest"] : ["curl", "Swagger UI"],
-        championName: t.champion || null,
-        championEmail: t.champion ? t.email : null,
-        championActive: t.score > 50,
-        collectionsCreated: t.collections,
-        testsWritten: t.tests,
-        ciPipelinesActive: t.pipelines,
-        activeUsers: t.users,
-        newmanRunsPerWeek: t.newman,
-        resistanceLevel: t.resistance,
-        resistanceNotes: t.resistanceNotes || null,
-      },
-    });
-  }
-  console.log(`✓ ${teams.length} AdoptionTeams`);
-
-  // ─── 22. DripCampaigns ─────────────────────────────────────────────
-  await prisma.dripCampaign.create({
-    data: {
-      projectId: project.id,
-      waveId: wave2.id,
-      name: "Core Banking Onboarding Drip",
-      description: "4-week email sequence introducing Postman to core banking teams",
-      targetAudience: "Java developers on core banking teams",
-      status: "active",
-      startDate: new Date(Date.now() - 5 * 86400_000),
-      cadence: "twice_weekly",
-      totalSteps: 8,
-      currentStep: 3,
-      stepsJson: [
-        { step: 1, title: "Welcome to Postman", channel: "email", sent: true },
-        { step: 2, title: "Your first collection in 5 minutes", channel: "email", sent: true },
-        { step: 3, title: "Environment variables deep-dive", channel: "email", sent: true },
-        { step: 4, title: "Newman in your CI pipeline", channel: "slack", sent: false },
-        { step: 5, title: "Contract testing basics", channel: "email", sent: false },
-        { step: 6, title: "Mock servers for dependencies", channel: "email", sent: false },
-        { step: 7, title: "Governance & best practices", channel: "email", sent: false },
-        { step: 8, title: "Champion program invitation", channel: "email", sent: false },
-      ],
-      recipientCount: 22,
-      openRate: 0.73,
-      engagementRate: 0.45,
-      conversionCount: 8,
-      aiGenerated: true,
-      aiRunId: id("airun-9"),
-    },
-  });
-
-  await prisma.dripCampaign.create({
-    data: {
-      projectId: project.id,
-      waveId: wave1.id,
-      name: "Payments Team Champion Enablement",
-      description: "Advanced content for the Payments team champions",
-      targetAudience: "Power users and champions",
-      status: "completed",
-      startDate: new Date(Date.now() - 25 * 86400_000),
-      cadence: "weekly",
-      totalSteps: 4,
-      currentStep: 4,
-      stepsJson: [
-        { step: 1, title: "Advanced test scripting", channel: "email", sent: true },
-        { step: 2, title: "Monitoring & scheduling runs", channel: "email", sent: true },
-        { step: 3, title: "Team workspace management", channel: "slack", sent: true },
-        { step: 4, title: "Presenting ROI to leadership", channel: "email", sent: true },
-      ],
-      recipientCount: 8,
-      openRate: 0.92,
-      engagementRate: 0.75,
-      conversionCount: 6,
-      aiGenerated: true,
-    },
-  });
-  console.log("✓ 2 DripCampaigns (active + completed)");
-
-  // ─── 23. AdoptionMilestones ────────────────────────────────────────
-  const milestones = [
-    { type: "first_collection", title: "First Collection Created!", team: "Payments API Team", days: 25 },
-    { type: "first_ci_run", title: "First Newman CI Run!", team: "Payments API Team", days: 22 },
-    { type: "team_onboarded", title: "Payments Team Fully Onboarded", team: "Payments API Team", days: 14 },
-    { type: "wave_complete", title: "Wave 1 Complete — Pilot Success!", team: null, days: 14 },
-    { type: "first_collection", title: "Core Banking Creates First Collection", team: "Core Banking API", days: 3 },
-  ];
-
-  for (const m of milestones) {
-    await prisma.adoptionMilestone.create({
-      data: {
-        projectId: project.id,
-        type: m.type,
-        title: m.title,
-        description: `${m.team || "Organization"} achieved: ${m.title}`,
-        teamName: m.team,
-        celebratedAt: new Date(Date.now() - m.days * 86400_000),
-        celebrationJson: { emoji: "🎉", message: `Congratulations! ${m.title}` },
-        metricsSnapshot: { collectionsTotal: 6 + Math.floor(Math.random() * 5), activeUsers: 10 + Math.floor(Math.random() * 15) },
-      },
-    });
-  }
-  console.log("✓ 5 AdoptionMilestones");
-
-  // ─── 24. ProjectNotes ──────────────────────────────────────────────
+  // ─── 20. ProjectNotes ──────────────────────────────────────────────
   const noteContents = [
     "Follow up with James Wright on Vault integration demo — scheduled for Tuesday",
     "Marcus mentioned the trading team is a potential blocker for org-wide standardization. Their gRPC use case needs a creative solution.",
@@ -1098,11 +1280,76 @@ GlobalBank is a Fortune 500 financial institution undergoing API platform modern
   }
   console.log("✓ 5 ProjectNotes");
 
+  // ─── 25. Admiral Notes + Tasks ───────────────────────────────────
+  // Ensure an Admiral user exists for authoring notes/tasks
+  const admiralHash = await bcrypt.hash("admiral123", 10);
+  const admiral = await prisma.user.upsert({
+    where: { email: "jared@postman.com" },
+    update: { role: "ADMIN", isAdmin: true },
+    create: {
+      email: "jared@postman.com",
+      name: "Jared",
+      passwordHash: admiralHash,
+      role: "ADMIN",
+      isAdmin: true,
+    },
+  });
+
+  const admiralNotes = [
+    { content: "GlobalBank is our highest-priority account this quarter. Sarah Chen is the exec sponsor — keep her informed but don't overwhelm with details. Marcus Johnson is the technical champion. Do NOT let the Insomnia evaluation derail progress.", pinned: true, phase: "DISCOVERY", scope: "project" },
+    { content: "Security blocker with James Wright is the critical path item. If the Vault demo next Tuesday goes well, we clear the biggest objection. If it doesn't, escalation path is Sarah Chen.", pinned: true, phase: "INFRASTRUCTURE", scope: "project" },
+    { content: "Great pilot results — 40% testing time reduction exceeded our 30% target. Use these numbers in the enterprise pitch. Lisa Park (QA Director) is particularly interested in the ROI data.", pinned: false, phase: null, scope: "project" },
+    { content: "Trading team's gRPC concerns are valid but shouldn't block the enterprise deal. Acknowledge it, propose a dual-tool exception, and keep moving. Michael Brown is vocal but isolated.", pinned: false, phase: "SOLUTION_DESIGN", scope: "project" },
+    { content: "Demo User has been crushing it on this engagement. The service template work and CI/CD pipeline setup are solid. Consider featuring this as a case study.", pinned: false, phase: null, scope: "cse" },
+  ];
+
+  for (let i = 0; i < admiralNotes.length; i++) {
+    const n = admiralNotes[i];
+    await prisma.admiralNote.create({
+      data: {
+        authorId: admiral.id,
+        projectId: project.id,
+        cseUserId: n.scope === "cse" ? user.id : null,
+        phase: n.phase,
+        scope: n.scope,
+        content: n.content,
+        pinned: n.pinned,
+        createdAt: new Date(Date.now() - (admiralNotes.length - i) * 86400_000),
+      },
+    });
+  }
+
+  const admiralTasks = [
+    { title: "Prepare Vault integration demo for Security team", description: "Build working POC of Newman pulling secrets from Vault via GitHub Actions env vars. Demo to James Wright on Tuesday.", priority: "high", status: "in_progress", dueDate: new Date(Date.now() + 3 * 86400_000) },
+    { title: "Create Postman vs Insomnia comparison matrix", description: "Objective feature comparison weighted by GlobalBank requirements. Include pilot ROI data. Due for evaluation committee Thursday.", priority: "high", status: "pending", dueDate: new Date(Date.now() + 5 * 86400_000) },
+    { title: "Draft enterprise license proposal", description: "Based on pilot metrics: 40% time reduction, 84% coverage, 18 active users. Calculate org-wide projection for 500+ engineers.", priority: "medium", status: "pending", dueDate: new Date(Date.now() + 10 * 86400_000) },
+    { title: "Schedule Wave 2 kickoff with Core Banking team", description: "Coordinate with David Kim (Core Banking API lead). Replicate pilot playbook. Target: 4 weeks to onboard 5 teams.", priority: "medium", status: "pending", dueDate: new Date(Date.now() + 7 * 86400_000) },
+    { title: "Payments team retrospective", description: "Capture lessons learned from pilot. Document reusable patterns. Get testimonial from Alex Rivera.", priority: "low", status: "completed", completedAt: new Date(Date.now() - 3 * 86400_000), dueDate: new Date(Date.now() - 5 * 86400_000) },
+  ];
+
+  for (const t of admiralTasks) {
+    await prisma.admiralTask.create({
+      data: {
+        authorId: admiral.id,
+        assigneeId: user.id,
+        projectId: project.id,
+        title: t.title,
+        description: t.description,
+        priority: t.priority,
+        status: t.status,
+        dueDate: t.dueDate,
+        completedAt: t.completedAt || null,
+      },
+    });
+  }
+  console.log(`✓ ${admiralNotes.length} AdmiralNotes + ${admiralTasks.length} AdmiralTasks`);
+
   // ─── Done ──────────────────────────────────────────────────────────
   console.log("\n🎉 Demo project fully seeded!");
   console.log(`   Project: ${project.name} (${project.id})`);
   console.log(`   URL: http://localhost:3000/projects/${project.id}`);
-  console.log("\n   Login: cse@postman.com / pipeline123");
+  console.log("\n   Login as CSE:     cse@postman.com / pipeline123");
+  console.log("   Login as Admin:   jared@postman.com / admiral123");
 }
 
 main()

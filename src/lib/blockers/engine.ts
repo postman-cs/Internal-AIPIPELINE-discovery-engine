@@ -34,6 +34,7 @@ import {
 import type { Prisma } from "@prisma/client";
 import type { BlockerDetection } from "@/lib/ai/agents/topologyTypes";
 import { logger } from "@/lib/logger";
+import { sendSlackAlert } from "@/lib/slack";
 
 const log = logger.child("blockers.engine");
 
@@ -123,11 +124,18 @@ export async function createBlocker(
   });
 
   log.info("Blocker created", { id: blocker.id, title: data.title, severity: data.severity });
+
+  const sev = data.severity ?? "MEDIUM";
+  if (sev === "HIGH" || sev === "CRITICAL") {
+    void notifySlackIfNeeded(projectId, { id: blocker.id, title: data.title, severity: sev, domain: data.domain });
+  }
+
   return blocker.id;
 }
 
 /**
  * Persist blockers detected by AI agents during phase analysis.
+ * Uses fuzzy title matching to prevent near-duplicate blockers.
  */
 export async function persistDetectedBlockers(
   projectId: string,
@@ -137,19 +145,23 @@ export async function persistDetectedBlockers(
 ): Promise<string[]> {
   const ids: string[] = [];
 
-  for (const d of detections) {
-    // Check for duplicate blockers (same title, same project)
-    const existing = await prisma.blocker.findFirst({
-      where: {
-        projectId,
-        title: d.title,
-        status: { notIn: ["NEUTRALIZED", "ACCEPTED"] },
-      },
-    });
+  const allExisting = await prisma.blocker.findMany({
+    where: { projectId },
+    select: { id: true, title: true, status: true },
+  });
 
-    if (existing) {
-      log.info("Skipping duplicate blocker", { title: d.title });
-      ids.push(existing.id);
+  for (const d of detections) {
+    const match = allExisting.find(
+      (b) => isSimilarTitle(b.title, d.title),
+    );
+
+    if (match) {
+      log.info("Skipping duplicate blocker (fuzzy match)", {
+        newTitle: d.title,
+        existingTitle: match.title,
+        existingStatus: match.status,
+      });
+      ids.push(match.id);
       continue;
     }
 
@@ -269,6 +281,16 @@ export async function updateBlockerStatus(
   });
 
   log.info("Blocker status updated", { id: blockerId, status });
+
+  if ((blocker.severity === "HIGH" || blocker.severity === "CRITICAL") && !isResolved) {
+    void notifySlackIfNeeded(blocker.projectId, {
+      id: blockerId,
+      title: blocker.title,
+      severity: blocker.severity,
+      domain: blocker.domain,
+    });
+  }
+
   return { success: true };
 }
 
@@ -698,6 +720,33 @@ export async function getBlockerDetail(blockerId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Slack notification helper
+// ---------------------------------------------------------------------------
+
+async function notifySlackIfNeeded(projectId: string, blocker: { id: string; title: string; severity: string; domain: string }) {
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { slackWebhookUrl: true, name: true },
+    });
+    if (!project?.slackWebhookUrl) return;
+
+    await sendSlackAlert(project.slackWebhookUrl, {
+      title: `Blocker Alert: ${blocker.title}`,
+      text: `A *${blocker.severity}* blocker has been flagged in project *${project.name}*.`,
+      color: blocker.severity === "CRITICAL" ? "#dc2626" : "#f59e0b",
+      fields: [
+        { title: "Severity", value: blocker.severity, short: true },
+        { title: "Domain", value: blocker.domain, short: true },
+      ],
+      actionUrl: `${process.env.NEXT_PUBLIC_BASE_URL || ""}/projects/${projectId}/blockers`,
+    });
+  } catch (err) {
+    log.warn("Slack notification failed", { projectId, blockerId: blocker.id, error: err });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Scoring helpers
 // ---------------------------------------------------------------------------
 
@@ -728,4 +777,40 @@ function computeOverallRisk(activeBlockers: BlockerMapView[]): number {
   }
 
   return Math.min(total, 100);
+}
+
+/**
+ * Fuzzy title similarity check for blocker dedup.
+ * Extracts significant words from each title and computes Jaccard overlap.
+ * Returns true if the titles are semantically similar enough to be the same blocker.
+ */
+function isSimilarTitle(a: string, b: string): boolean {
+  if (a === b) return true;
+
+  const normalize = (s: string) =>
+    s.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, "")
+      .split(/\s+/)
+      .filter((w) => w.length > 2);
+
+  const STOP_WORDS = new Set([
+    "the", "and", "for", "with", "from", "that", "this", "are", "was",
+    "has", "have", "not", "but", "its", "can", "may", "will", "into",
+    "creates", "create", "based", "unknown", "lack",
+  ]);
+
+  const wordsA = new Set(normalize(a).filter((w) => !STOP_WORDS.has(w)));
+  const wordsB = new Set(normalize(b).filter((w) => !STOP_WORDS.has(w)));
+
+  if (wordsA.size === 0 || wordsB.size === 0) return false;
+
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
+  }
+
+  const union = new Set([...wordsA, ...wordsB]).size;
+  const jaccard = intersection / union;
+
+  return jaccard >= 0.5;
 }

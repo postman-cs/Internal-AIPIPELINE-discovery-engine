@@ -117,22 +117,31 @@ export const PHASE_GRAPH: readonly PhaseNode[] = [
     order: 8,
   },
   {
-    phase: "MONITORING",
-    label: "Monitoring",
-    shortLabel: "MON",
-    description: "Ongoing health checks, sentiment tracking, and renewal signals",
+    phase: "MEETINGS",
+    label: "Meetings",
+    shortLabel: "MTG",
+    description: "Customer meeting transcripts ingested and analyzed to update cascade with real-world insights",
     dependencies: ["DEPLOYMENT_PLAN"],
     implemented: true,
     order: 9,
   },
   {
-    phase: "ITERATION",
-    label: "Iteration",
-    shortLabel: "ITR",
-    description: "Continuous improvement based on monitoring insights",
-    dependencies: ["MONITORING", "DISCOVERY"],
+    phase: "WORKING_SESSIONS",
+    label: "Working Sessions",
+    shortLabel: "WRK",
+    description: "Hands-on working session transcripts — pair programming, workshops, config reviews — feeding back into the cascade",
+    dependencies: ["DEPLOYMENT_PLAN"],
     implemented: true,
     order: 10,
+  },
+  {
+    phase: "BUILD_LOG",
+    label: "Build Log",
+    shortLabel: "BLD",
+    description: "Build log: use case, internal proof, what was built, value unlocked, implementation kit, case study, and next motion",
+    dependencies: ["DEPLOYMENT_PLAN", "MEETINGS", "WORKING_SESSIONS"],
+    implemented: true,
+    order: 11,
   },
 ] as const;
 
@@ -194,4 +203,35 @@ export function isUpstreamOf(a: Phase, b: Phase): boolean {
   const deps = getDependencies(b);
   if (deps.includes(a)) return true;
   return deps.some((dep) => isUpstreamOf(a, dep));
+}
+
+// ---------------------------------------------------------------------------
+// Topological tier computation for parallel execution
+// ---------------------------------------------------------------------------
+
+const tierCache = new Map<Phase, number>();
+
+export function getPhaseTier(phase: Phase): number {
+  const cached = tierCache.get(phase);
+  if (cached !== undefined) return cached;
+
+  const deps = getDependencies(phase);
+  const tier = deps.length === 0 ? 0 : Math.max(...deps.map(getPhaseTier)) + 1;
+  tierCache.set(phase, tier);
+  return tier;
+}
+
+/**
+ * Group phases into tiers where all phases in a tier can execute concurrently.
+ * Tier 0 = no dependencies (DISCOVERY).
+ * Tier N = max(dependency tiers) + 1.
+ */
+export function getTopologicalTiers(): Map<number, Phase[]> {
+  const tiers = new Map<number, Phase[]>();
+  for (const node of PHASE_GRAPH) {
+    const tier = getPhaseTier(node.phase);
+    if (!tiers.has(tier)) tiers.set(tier, []);
+    tiers.get(tier)!.push(node.phase);
+  }
+  return tiers;
 }

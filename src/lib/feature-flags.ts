@@ -33,7 +33,6 @@ export type FeatureFlag =
   | "MONITOR_GATES"         // Postman Monitor as deployment gate
   | "ASSUMPTION_VERIFICATION"  // Human assumption verification gates
   | "BLOCKER_SYSTEM"           // Blocker Mapping → Missile → Nuke system
-  | "ADOPTION_ACCELERATOR"    // Wide Adoption Accelerator with drip/tide
   | "MULTI_MODEL_ROUTING";   // Intelligent model routing (OpenAI + Anthropic)
 
 /** Default flag values — true = enabled by default */
@@ -61,7 +60,6 @@ const DEFAULTS: Record<FeatureFlag, boolean> = {
   MONITOR_GATES: true,
   ASSUMPTION_VERIFICATION: true,
   BLOCKER_SYSTEM: true,
-  ADOPTION_ACCELERATOR: true,
   MULTI_MODEL_ROUTING: true,
 };
 

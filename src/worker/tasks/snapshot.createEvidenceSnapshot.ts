@@ -31,7 +31,8 @@ const task: Task = async (payload, helpers) => {
 
   logger.info(`New snapshot ${newSnapshot.snapshotId} created (hash: ${newSnapshot.hash.slice(0, 12)}...)`);
 
-  // Enqueue impact analysis
+  const { PRIORITY } = await import("@/worker/index");
+
   await addJob("cascade.impactAnalysis", {
     projectId,
     snapshotId: newSnapshot.snapshotId,
@@ -39,6 +40,7 @@ const task: Task = async (payload, helpers) => {
   }, {
     maxAttempts: 2,
     queueName: `cascade-${projectId}`,
+    priority: PRIORITY.CRITICAL,
   });
 };
 

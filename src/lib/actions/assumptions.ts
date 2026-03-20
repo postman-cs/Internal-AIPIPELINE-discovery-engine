@@ -75,8 +75,8 @@ export async function getProjectAssumptions(
       humanResponse: a.humanResponse,
       verifiedBy: a.verifiedBy,
       verifiedAt: a.verifiedAt?.toISOString() ?? null,
-      evidenceIds: (a.evidenceIds as string[]) ?? [],
-      blocksPhases: (a.blocksPhases as string[]) ?? [],
+      evidenceIds: Array.isArray(a.evidenceIds) ? (a.evidenceIds as string[]) : [],
+      blocksPhases: Array.isArray(a.blocksPhases) ? (a.blocksPhases as string[]) : [],
       createdAt: a.createdAt.toISOString(),
     })),
     summary,
@@ -135,6 +135,10 @@ export async function confirmAssumption(assumptionId: string) {
   const result = await verifyAssumption(assumptionId, session.userId);
 
   if (result.success) {
+    import("@/lib/gamification/xp-engine").then(({ awardXp, XP_ACTIONS }) => {
+      awardXp(session.userId, XP_ACTIONS.ASSUMPTION_VERIFIED.action, XP_ACTIONS.ASSUMPTION_VERIFIED.points, assumption.projectId).catch(() => {});
+    }).catch(() => {});
+
     revalidatePath(`/projects/${assumption.projectId}/assumptions`);
     revalidatePath(`/projects/${assumption.projectId}/updates`);
   }
@@ -282,45 +286,69 @@ export async function resumeCascadeAfterVerification(projectId: string) {
     include: { tasks: true },
   });
 
-  if (!pausedJob) {
-    return { error: "No paused cascade job found. There may be nothing to resume." };
+  if (pausedJob) {
+    // Check if all critical assumptions are now verified
+    const summary = await getVerificationSummary(projectId);
+    if (summary.criticalPending.length > 0) {
+      return {
+        error: `${summary.criticalPending.length} critical assumption(s) still need verification before the cascade can resume.`,
+        criticalPending: summary.criticalPending,
+      };
+    }
+
+    // Reset the paused job's skipped tasks back to PENDING
+    const skippedTasks = pausedJob.tasks.filter(
+      (t) => t.status === "SKIPPED" && t.message?.includes("assumption verification")
+    );
+
+    for (const task of skippedTasks) {
+      await prisma.recomputeTask.update({
+        where: { id: task.id },
+        data: { status: "PENDING", message: null, finishedAt: null },
+      });
+    }
+
+    try {
+      const { executeRecomputeJob } = await import("@/lib/cascade/recompute");
+      const result = await executeRecomputeJob(pausedJob.id, { gatedMode: true });
+
+      revalidatePath(`/projects/${projectId}/updates`);
+      revalidatePath(`/projects/${projectId}/assumptions`);
+
+      return {
+        success: true,
+        completedTasks: result.completedTasks,
+        proposalCount: result.proposals.length,
+        pausedAtPhase: result.pausedAtPhase,
+        errors: result.errors,
+      };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "Failed to resume paused cascade" };
+    }
   }
 
-  // Check if all critical assumptions are now verified
-  const summary = await getVerificationSummary(projectId);
-  if (summary.criticalPending.length > 0) {
+  // No paused job — trigger a fresh cascade for any DIRTY phases
+  try {
+    const { triggerCascadeUpdate } = await import("@/lib/actions/cascade");
+    const result = await triggerCascadeUpdate(projectId);
+
+    revalidatePath(`/projects/${projectId}/updates`);
+    revalidatePath(`/projects/${projectId}/assumptions`);
+
+    if ("error" in result && result.error) {
+      return { error: result.error };
+    }
+
     return {
-      error: `${summary.criticalPending.length} critical assumption(s) still need verification before the cascade can resume.`,
-      criticalPending: summary.criticalPending,
+      success: true,
+      jobId: "jobId" in result ? result.jobId : undefined,
+      impactedPhases: "impactedPhases" in result ? (result.impactedPhases as string[]).length : 0,
+      async: true,
+      message: "No paused job found — triggered a fresh cascade update.",
     };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "Failed to trigger cascade" };
   }
-
-  // Reset the paused job's skipped tasks back to PENDING
-  const skippedTasks = pausedJob.tasks.filter(
-    (t) => t.status === "SKIPPED" && t.message?.includes("assumption verification")
-  );
-
-  for (const task of skippedTasks) {
-    await prisma.recomputeTask.update({
-      where: { id: task.id },
-      data: { status: "PENDING", message: null, finishedAt: null },
-    });
-  }
-
-  // Re-run the job (dynamic import to avoid circular deps)
-  const { executeRecomputeJob } = await import("@/lib/cascade/recompute");
-  const result = await executeRecomputeJob(pausedJob.id, { gatedMode: true });
-
-  revalidatePath(`/projects/${projectId}/updates`);
-  revalidatePath(`/projects/${projectId}/assumptions`);
-
-  return {
-    success: true,
-    completedTasks: result.completedTasks,
-    proposalCount: result.proposals.length,
-    pausedAtPhase: result.pausedAtPhase,
-    errors: result.errors,
-  };
 }
 
 // ---------------------------------------------------------------------------

@@ -40,10 +40,11 @@ const task: Task = async (payload, helpers) => {
         `Gmail ingest: ${result.documentsIngested} docs, ${result.attachmentsProcessed} attachments, ${result.skipped} skipped, ${result.errors.length} errors`,
       );
       if (result.documentsIngested > 0 || result.attachmentsProcessed > 0) {
+        const { PRIORITY } = await import("@/worker/index");
         await addJob(
           "snapshot.createEvidenceSnapshot",
           { projectId },
-          { maxAttempts: 2, queueName: `snapshot-${projectId}` },
+          { maxAttempts: 2, queueName: `snapshot-${projectId}`, priority: PRIORITY.NORMAL },
         );
       }
       return;
@@ -93,10 +94,11 @@ const task: Task = async (payload, helpers) => {
   logger.info(`Processed: ${processed}, skipped (dedup): ${skipped}`);
 
   if (processed > 0) {
+    const { PRIORITY } = await import("@/worker/index");
     await addJob(
       "snapshot.createEvidenceSnapshot",
       { projectId },
-      { maxAttempts: 2, queueName: `snapshot-${projectId}` },
+      { maxAttempts: 2, queueName: `snapshot-${projectId}`, priority: PRIORITY.NORMAL },
     );
   }
 };

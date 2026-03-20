@@ -1,10 +1,15 @@
 "use client";
 
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { CodeSnippet } from "@/components/CodeSnippet";
 import { PlatformTabs } from "@/components/PlatformTabs";
 import type { CiCdPlaybookData } from "@/lib/actions/cicd";
+
+import { LazyCanvas } from "@/components/LazyCanvas";
+
+const PulseStreamView = dynamic(() => import("./PulseStreamView"), { ssr: false });
 
 interface CiCdPlaybookProps {
   data: CiCdPlaybookData;
@@ -461,6 +466,17 @@ export function CiCdPlaybook({ data, projectId }: CiCdPlaybookProps) {
   return (
     <div className="space-y-5">
 
+      {/* ---------- Pulse Stream Visualization ---------- */}
+      <LazyCanvas>
+        <PulseStreamView
+          stages={data.ciCdStages}
+          gates={data.environmentPromotionGates}
+          monitors={[]}
+          pipelines={data.ciCdPipelines}
+          hasData={data.hasData}
+        />
+      </LazyCanvas>
+
       {/* ---------- Stats Summary ---------- */}
       <div className="flex flex-wrap gap-2">
         <StatCard label="Collections" value={data.postmanCollections.length} icon={<CollectionIcon />} />
@@ -469,7 +485,7 @@ export function CiCdPlaybook({ data, projectId }: CiCdPlaybookProps) {
         <StatCard label="Pipelines" value={data.ciCdPipelines.length} icon={<PipelineIcon />} />
         <StatCard label="Deploy Stages" value={data.ciCdStages.length} icon={<DeployIcon />} />
         <StatCard label="Promotion Gates" value={data.environmentPromotionGates.length} icon={<GateIcon />} />
-        <StatCard label="Monitors" value={data.postmanMonitors.length} icon={<MonitorIcon />} />
+        <StatCard label="Monitors" value={0} icon={<MonitorIcon />} />
       </div>
 
       {/* ---------- Phase version pills ---------- */}
@@ -821,45 +837,7 @@ export function CiCdPlaybook({ data, projectId }: CiCdPlaybookProps) {
         </Section>
       )}
 
-      {/* ---------- 7. Postman Monitors ---------- */}
-      {data.postmanMonitors.length > 0 && (
-        <Section
-          id="monitors"
-          title="Postman Monitors"
-          description="Scheduled collection runs for production health monitoring."
-          badge={`${data.postmanMonitors.length}`}
-          icon={<MonitorIcon />}
-        >
-          <div className="space-y-2">
-            {data.postmanMonitors.map((mon, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-4 px-4 py-3 rounded-lg"
-                style={{ background: "rgba(255,255,255,0.015)", border: "1px solid var(--border)" }}
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium" style={{ color: "var(--foreground)" }}>{mon.name}</span>
-                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.03)", color: "var(--foreground-dim)" }}>
-                      {mon.collectionRef}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3 mt-1 text-[11px]" style={{ color: "var(--foreground-dim)" }}>
-                    <span>Env: <span className="font-medium" style={{ color: "var(--foreground-muted)" }}>{mon.environmentRef}</span></span>
-                    <span>Regions: {mon.regions.join(", ")}</span>
-                    <span>Alerts: {mon.alertChannels.join(", ")}</span>
-                  </div>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="text-xs font-medium" style={{ color: "var(--accent-cyan)" }}>
-                    {mon.schedule}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
+      {/* Monitors section removed — monitoring phase deprecated */}
 
       {/* ---------- Notes ---------- */}
       {data.ciCdNotes.length > 0 && (

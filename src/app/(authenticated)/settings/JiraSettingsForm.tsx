@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useMemo } from "react";
 import { saveJiraSettings, disconnectJira } from "@/lib/actions/settings";
 
 interface JiraSettingsFormProps {
@@ -14,12 +14,34 @@ interface JiraSettingsFormProps {
   isConfigured: boolean;
 }
 
+function validateUrl(val: string): string | null {
+  if (!val) return "Jira Cloud URL is required";
+  if (!/^https?:\/\/.+/.test(val)) return "Must be a valid URL starting with https://";
+  if (!/atlassian\.net/.test(val) && !/jira/.test(val)) return "Expected a Jira URL (e.g. https://company.atlassian.net)";
+  return null;
+}
+
+function validateEmail(val: string): string | null {
+  if (!val) return "Email is required";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) return "Invalid email address";
+  return null;
+}
+
+function validateToken(val: string): string | null {
+  if (!val) return "API token is required";
+  if (val.length < 10) return "Token seems too short";
+  return null;
+}
+
+const errorStyle = { color: "#f87171", fontSize: "11px", marginTop: 4 } as const;
+
 export function JiraSettingsForm({
   initialValues,
   isConfigured,
 }: JiraSettingsFormProps) {
   const [isPending, startTransition] = useTransition();
   const [values, setValues] = useState(initialValues);
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [message, setMessage] = useState<{
     type: "success" | "error" | "info";
     text: string;
@@ -29,6 +51,14 @@ export function JiraSettingsForm({
     displayName?: string;
     error?: string;
   } | null>(null);
+
+  const validationErrors = useMemo(() => ({
+    jiraBaseUrl: validateUrl(values.jiraBaseUrl),
+    jiraEmail: validateEmail(values.jiraEmail),
+    jiraApiToken: validateToken(values.jiraApiToken),
+  }), [values.jiraBaseUrl, values.jiraEmail, values.jiraApiToken]);
+
+  const markTouched = (field: string) => setTouched((t) => ({ ...t, [field]: true }));
 
   const flash = (type: "success" | "error" | "info", text: string) => {
     setMessage({ type, text });
@@ -189,7 +219,12 @@ export function JiraSettingsForm({
             onChange={(e) =>
               setValues((v) => ({ ...v, jiraBaseUrl: e.target.value }))
             }
+            onBlur={() => markTouched("jiraBaseUrl")}
+            style={touched.jiraBaseUrl && validationErrors.jiraBaseUrl ? { borderColor: "#f87171" } : undefined}
           />
+          {touched.jiraBaseUrl && validationErrors.jiraBaseUrl && (
+            <p style={errorStyle}>{validationErrors.jiraBaseUrl}</p>
+          )}
         </div>
         <div>
           <label className="label">Jira Account Email *</label>
@@ -201,7 +236,12 @@ export function JiraSettingsForm({
             onChange={(e) =>
               setValues((v) => ({ ...v, jiraEmail: e.target.value }))
             }
+            onBlur={() => markTouched("jiraEmail")}
+            style={touched.jiraEmail && validationErrors.jiraEmail ? { borderColor: "#f87171" } : undefined}
           />
+          {touched.jiraEmail && validationErrors.jiraEmail && (
+            <p style={errorStyle}>{validationErrors.jiraEmail}</p>
+          )}
         </div>
         <div>
           <label className="label">API Token *</label>
@@ -213,7 +253,12 @@ export function JiraSettingsForm({
             onChange={(e) =>
               setValues((v) => ({ ...v, jiraApiToken: e.target.value }))
             }
+            onBlur={() => markTouched("jiraApiToken")}
+            style={touched.jiraApiToken && validationErrors.jiraApiToken ? { borderColor: "#f87171" } : undefined}
           />
+          {touched.jiraApiToken && validationErrors.jiraApiToken && (
+            <p style={errorStyle}>{validationErrors.jiraApiToken}</p>
+          )}
           <p
             className="text-[11px] mt-1"
             style={{ color: "var(--foreground-dim)" }}

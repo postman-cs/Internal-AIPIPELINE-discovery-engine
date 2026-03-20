@@ -2,17 +2,55 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/session";
 import { computeProjectHealth, countDiscoveryFields, classifyFreshness } from "@/lib/gamification/scoring";
+import { getUserXpData } from "@/lib/gamification/xp-engine";
 import { ProgressRing, PhaseProgressBar } from "@/components/ProgressRing";
+import { CommandConstellationWrapper } from "./CommandConstellationWrapper";
+import XpHud from "./XpHud";
+import PlanetShowcase from "./PlanetShowcase";
+import { unstable_cache } from "next/cache";
+
+const getCachedDashboardStats = unstable_cache(
+  async (userId: string) => {
+    const [totalDocs, totalChunks, totalAIRuns, phaseArtifacts, blockerCounts, assumptionCounts] = await Promise.all([
+      prisma.sourceDocument.count({ where: { project: { ownerUserId: userId } } }),
+      prisma.documentChunk.count({ where: { document: { project: { ownerUserId: userId } } } }),
+      prisma.aIRun.count({ where: { project: { ownerUserId: userId } } }),
+      prisma.phaseArtifact.findMany({
+        where: { project: { ownerUserId: userId } },
+        select: { projectId: true, phase: true },
+        distinct: ["projectId", "phase"],
+      }),
+      prisma.blocker.groupBy({
+        by: ["projectId"],
+        where: {
+          project: { ownerUserId: userId },
+          status: { notIn: ["ACCEPTED", "DORMANT"] },
+        },
+        _count: true,
+      }),
+      prisma.assumption.groupBy({
+        by: ["projectId"],
+        where: {
+          project: { ownerUserId: userId },
+          status: "PENDING",
+        },
+        _count: true,
+      }),
+    ]);
+    return { totalDocs, totalChunks, totalAIRuns, phaseArtifacts, blockerCounts, assumptionCounts };
+  },
+  ["dashboard-stats"],
+  { revalidate: 30 }
+);
 
 export default async function DashboardPage() {
   const session = await requireAuth();
   const userId = session.userId;
 
-  const [recentProjects, latestRun, totalDocs, totalChunks, totalAIRuns, phaseArtifacts] = await Promise.all([
+  const [recentProjects, latestRun, cachedStats, xpData] = await Promise.all([
     prisma.project.findMany({
       where: { ownerUserId: userId },
       orderBy: [{ isPinned: "desc" }, { updatedAt: "desc" }],
-      take: 6,
       include: {
         discoveryArtifacts: { orderBy: { version: "desc" }, take: 1 },
         sourceDocuments: { select: { id: true } },
@@ -24,15 +62,14 @@ export default async function DashboardPage() {
       orderBy: { startedAt: "desc" },
       include: { _count: { select: { items: true } } },
     }),
-    prisma.sourceDocument.count({ where: { project: { ownerUserId: userId } } }),
-    prisma.documentChunk.count({ where: { document: { project: { ownerUserId: userId } } } }),
-    prisma.aIRun.count({ where: { project: { ownerUserId: userId } } }),
-    prisma.phaseArtifact.findMany({
-      where: { project: { ownerUserId: userId } },
-      select: { projectId: true, phase: true },
-      distinct: ["projectId", "phase"],
-    }),
+    getCachedDashboardStats(userId),
+    getUserXpData(userId),
   ]);
+
+  const { totalDocs, totalChunks, totalAIRuns, phaseArtifacts, blockerCounts, assumptionCounts } = cachedStats;
+
+  const blockersByProject = new Map(blockerCounts.map((b) => [b.projectId, b._count]));
+  const assumptionsByProject = new Map(assumptionCounts.map((a) => [a.projectId, a._count]));
 
   // Compute per-project phase counts
   const phaseCountByProject = new Map<string, number>();
@@ -66,36 +103,89 @@ export default async function DashboardPage() {
   const MOMENTUM_COLORS = { rising: "var(--accent-green)", steady: "var(--accent-cyan)", cooling: "var(--foreground-dim)" };
   const FRESHNESS_COLORS = { new: "var(--accent-green)", recent: "var(--accent-cyan)", aging: "var(--accent-yellow)", stale: "var(--foreground-dim)" };
 
+  // Build cluster data for CommandConstellation
+  const constellationClusters = projectScores.map(({ project, health, freshness }) => ({
+    id: project.id,
+    name: project.name,
+    domain: project.primaryDomain || "General",
+    health: health.overall,
+    level: health.level,
+    momentum: health.momentum,
+    completedPhases: health.completedPhases,
+    totalPhases: health.totalPhases,
+    freshness,
+    activeBlockers: blockersByProject.get(project.id) ?? 0,
+    pendingAssumptions: assumptionsByProject.get(project.id) ?? 0,
+    isPinned: project.isPinned,
+  }));
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold" style={{ color: "var(--foreground)" }}>
-          Dashboard
-        </h1>
-        <p className="text-sm mt-1" style={{ color: "var(--foreground-dim)" }}>
-          Welcome back{session.name ? `, ${session.name}` : ""}
-        </p>
+      <div className="mb-6 flex items-end justify-between">
+        <div>
+          <h1 className="text-2xl font-bold" style={{ color: "var(--foreground)" }}>
+            Dashboard
+          </h1>
+          <p className="text-sm mt-1" style={{ color: "var(--foreground-dim)" }}>
+            Welcome back{session.name ? `, ${session.name}` : ""}
+          </p>
+        </div>
+        <div className="flex gap-3 flex-wrap">
+          <Link href="/ingest" className="btn-primary text-sm">
+            Run Ingest
+          </Link>
+          <Link href="/projects" className="btn-secondary text-sm">
+            Create Project
+          </Link>
+          <span className="text-xs self-center" style={{ color: "var(--foreground-dim)" }}>
+            ⌘K
+          </span>
+        </div>
       </div>
 
-      {/* Quick Stats — gamified */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
-        <StatCard value={recentProjects.length} label="Projects" icon="◨" color="var(--accent-orange)" />
+      {/* ── XP HUD with Prominent Planet ── */}
+      {xpData && (
+        <div className="mb-6 grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-6">
+          {/* Prominent Planet Card */}
+          <div
+            className="card-glow flex flex-col items-center justify-center py-6"
+            style={{ minHeight: 200 }}
+          >
+            <PlanetShowcase
+              level={xpData.levelInfo.level}
+              title={xpData.levelInfo.title}
+              description={xpData.levelInfo.description}
+              color={xpData.levelInfo.color}
+            />
+          </div>
+          {/* XP Progress & Activity */}
+          <XpHud
+            levelInfo={xpData.levelInfo}
+            streak={xpData.xpStreak}
+            recentEvents={xpData.recentEvents.map((e) => ({
+              ...e,
+              createdAt: e.createdAt.toISOString(),
+            }))}
+          />
+        </div>
+      )}
+
+      {/* ── Galactic Command Constellation ── */}
+      {constellationClusters.length > 0 && (
+        <div className="mb-6 rounded-xl overflow-hidden border" style={{ borderColor: "rgba(34, 204, 170, 0.1)", background: "rgba(4, 10, 20, 0.5)" }}>
+          <CommandConstellationWrapper
+            projects={constellationClusters}
+            stats={{ docs: totalDocs, chunks: totalChunks, aiRuns: totalAIRuns }}
+          />
+        </div>
+      )}
+
+      {/* Quick Stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+        <StatCard value={recentProjects.length} label="Projects" icon="◨" color="var(--accent-green)" />
         <StatCard value={totalDocs} label="Evidence Docs" icon="◉" color="var(--accent-cyan)" />
         <StatCard value={totalChunks} label="Evidence Chunks" icon="◈" color="var(--accent-blue)" />
         <StatCard value={totalAIRuns} label="AI Runs" icon="⚡" color="var(--accent-purple)" />
-      </div>
-
-      {/* Quick Actions */}
-      <div className="flex gap-3 mb-8 flex-wrap">
-        <Link href="/ingest" className="btn-primary text-sm">
-          Run Ingest
-        </Link>
-        <Link href="/projects" className="btn-secondary text-sm">
-          Create Project
-        </Link>
-        <span className="text-xs self-center" style={{ color: "var(--foreground-dim)" }}>
-          ⌘K to search &amp; navigate
-        </span>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

@@ -30,13 +30,15 @@ const task: Task = async (payload, helpers) => {
     `${result.virtualDirty.length} virtual dirty`
   );
 
-  // Enqueue proposal generation
+  const { PRIORITY } = await import("@/worker/index");
+
   await addJob("cascade.generateProposals", {
     jobId: result.jobId,
     projectId,
   }, {
-    maxAttempts: 1, // AI calls are expensive — don't retry automatically
+    maxAttempts: 1,
     queueName: `cascade-${projectId}`,
+    priority: PRIORITY.CRITICAL,
   });
 };
 

@@ -1,22 +1,3 @@
-/**
- * Impact Analysis Engine
- *
- * Determines which phases are affected when evidence changes,
- * and transitions artifact statuses accordingly.
- *
- * Rules:
- * - DISCOVERY is ALWAYS impacted by new evidence.
- * - Downstream phases are impacted if:
- *   a) They have an artifact that references an upstream version that changed
- *   b) Their snapshot hash differs from the new snapshot
- *   c) They are downstream of any DIRTY phase (transitive cascade)
- * - Phases with no artifact yet are "virtually DIRTY" — they get tracked
- *   in RecomputeTask but don't have a PhaseArtifact row to update.
- *
- * The impact analysis does NOT run recompute — it only marks artifacts DIRTY
- * and creates a RecomputeJob with tasks for the user to trigger.
- */
-
 import { prisma } from "@/lib/prisma";
 import { Phase, ArtifactStatus } from "@prisma/client";
 import { getDownstream, PHASE_GRAPH, getAllPhasesOrdered } from "./phases";
@@ -27,58 +8,105 @@ export interface ImpactResult {
   snapshotId: string;
   impactedPhases: Phase[];
   dirtyArtifacts: Array<{ phase: Phase; version: number }>;
-  virtualDirty: Phase[]; // phases with no artifact yet
+  virtualDirty: Phase[];
 }
 
-/**
- * Run impact analysis after a new EvidenceSnapshot is created.
- *
- * 1. Mark Discovery DIRTY (always)
- * 2. Transitively mark all downstream phases DIRTY
- * 3. Create a RecomputeJob with tasks for each impacted phase
- * 4. Skip phases whose latest artifact already has this snapshotId in ignoredSnapshotIds
- */
 export async function runImpactAnalysis(
   projectId: string,
   snapshotId: string,
-  triggeredBy: "INGEST" | "MANUAL"
+  triggeredBy: "INGEST" | "MANUAL" | "WEBHOOK"
 ): Promise<ImpactResult> {
-  // Get latest artifact for each phase
   const latestArtifacts = await getLatestArtifactPerPhase(projectId);
 
-  // Discovery is always impacted
   const impactedPhases = new Set<Phase>(["DISCOVERY"]);
 
-  // All phases downstream of Discovery are also impacted
   const downstream = getDownstream("DISCOVERY");
   for (const phase of downstream) {
     impactedPhases.add(phase);
   }
 
-  // Filter out phases that have this snapshot in their ignored list
   const filteredPhases: Phase[] = [];
   for (const phase of impactedPhases) {
     const artifact = latestArtifacts.get(phase);
     if (artifact) {
       const ignored = (artifact.ignoredSnapshotIds as string[] | null) || [];
       if (ignored.includes(snapshotId)) {
-        continue; // Skip — user already rejected this snapshot for this phase
+        continue;
       }
     }
     filteredPhases.push(phase);
   }
 
-  // Sort by topological order
   const allOrdered = getAllPhasesOrdered();
-  filteredPhases.sort(
-    (a, b) => allOrdered.indexOf(a) - allOrdered.indexOf(b)
+  filteredPhases.sort((a, b) => allOrdered.indexOf(a) - allOrdered.indexOf(b));
+
+  const { dirtyArtifacts, virtualDirty } = await markPhasesDirty(latestArtifacts, filteredPhases);
+
+  const job = await createRecomputeJobWithTasks(
+    projectId, triggeredBy, snapshotId, filteredPhases, latestArtifacts
   );
 
-  // Mark existing artifacts DIRTY
+  return {
+    jobId: job.id,
+    snapshotId,
+    impactedPhases: filteredPhases,
+    dirtyArtifacts,
+    virtualDirty,
+  };
+}
+
+export async function runSelectiveImpactAnalysis(
+  projectId: string,
+  snapshotId: string,
+  triggeredBy: "INGEST" | "MANUAL",
+  fromPhase: Phase
+): Promise<ImpactResult> {
+  const latestArtifacts = await getLatestArtifactPerPhase(projectId);
+
+  const impactedPhases = new Set<Phase>([fromPhase]);
+  const downstream = getDownstream(fromPhase);
+  for (const phase of downstream) {
+    impactedPhases.add(phase);
+  }
+
+  const filteredPhases: Phase[] = [];
+  for (const phase of impactedPhases) {
+    const artifact = latestArtifacts.get(phase);
+    if (artifact) {
+      const ignored = (artifact.ignoredSnapshotIds as string[] | null) || [];
+      if (ignored.includes(snapshotId)) {
+        continue;
+      }
+    }
+    filteredPhases.push(phase);
+  }
+
+  const allOrdered = getAllPhasesOrdered();
+  filteredPhases.sort((a, b) => allOrdered.indexOf(a) - allOrdered.indexOf(b));
+
+  const { dirtyArtifacts, virtualDirty } = await markPhasesDirty(latestArtifacts, filteredPhases);
+
+  const job = await createRecomputeJobWithTasks(
+    projectId, triggeredBy, snapshotId, filteredPhases, latestArtifacts
+  );
+
+  return {
+    jobId: job.id,
+    snapshotId,
+    impactedPhases: filteredPhases,
+    dirtyArtifacts,
+    virtualDirty,
+  };
+}
+
+async function markPhasesDirty(
+  latestArtifacts: LatestArtifactMap,
+  phases: Phase[]
+): Promise<{ dirtyArtifacts: Array<{ phase: Phase; version: number }>; virtualDirty: Phase[] }> {
   const dirtyArtifacts: Array<{ phase: Phase; version: number }> = [];
   const virtualDirty: Phase[] = [];
 
-  for (const phase of filteredPhases) {
+  for (const phase of phases) {
     const artifact = latestArtifacts.get(phase);
     if (artifact && artifact.status !== "DIRTY" && artifact.status !== "NEEDS_REVIEW") {
       await prisma.phaseArtifact.update({
@@ -91,7 +119,16 @@ export async function runImpactAnalysis(
     }
   }
 
-  // Create RecomputeJob
+  return { dirtyArtifacts, virtualDirty };
+}
+
+async function createRecomputeJobWithTasks(
+  projectId: string,
+  triggeredBy: string,
+  snapshotId: string,
+  phases: Phase[],
+  latestArtifacts: LatestArtifactMap
+) {
   const job = await prisma.recomputeJob.create({
     data: {
       projectId,
@@ -101,12 +138,10 @@ export async function runImpactAnalysis(
     },
   });
 
-  // Create RecomputeTask for each impacted phase
-  for (const phase of filteredPhases) {
+  for (const phase of phases) {
     const artifact = latestArtifacts.get(phase);
     const upstreamVersions: Record<string, number> = {};
 
-    // Resolve upstream versions
     const node = PHASE_GRAPH.find((n) => n.phase === phase);
     if (node) {
       for (const dep of node.dependencies) {
@@ -131,22 +166,15 @@ export async function runImpactAnalysis(
     });
   }
 
-  return {
-    jobId: job.id,
-    snapshotId,
-    impactedPhases: filteredPhases,
-    dirtyArtifacts,
-    virtualDirty,
-  };
+  return job;
 }
 
-/**
- * Get the latest PhaseArtifact for each phase in a project.
- */
-async function getLatestArtifactPerPhase(
-  projectId: string
-): Promise<Map<Phase, { id: string; version: number; status: ArtifactStatus; snapshotId: string | null; ignoredSnapshotIds: unknown }>> {
-  // Get all artifacts, grouped by phase, latest version first
+type LatestArtifactMap = Map<
+  Phase,
+  { id: string; version: number; status: ArtifactStatus; snapshotId: string | null; ignoredSnapshotIds: unknown }
+>;
+
+async function getLatestArtifactPerPhase(projectId: string): Promise<LatestArtifactMap> {
   const artifacts = await prisma.phaseArtifact.findMany({
     where: { projectId },
     orderBy: [{ phase: "asc" }, { version: "desc" }],
@@ -160,7 +188,7 @@ async function getLatestArtifactPerPhase(
     },
   });
 
-  const map = new Map<Phase, { id: string; version: number; status: ArtifactStatus; snapshotId: string | null; ignoredSnapshotIds: unknown }>();
+  const map: LatestArtifactMap = new Map();
   for (const a of artifacts) {
     if (!map.has(a.phase)) {
       map.set(a.phase, a);
@@ -170,27 +198,14 @@ async function getLatestArtifactPerPhase(
   return map;
 }
 
-/**
- * Get the latest PhaseArtifact for a specific phase.
- */
-export async function getLatestPhaseArtifact(
-  projectId: string,
-  phase: Phase
-) {
+export async function getLatestPhaseArtifact(projectId: string, phase: Phase) {
   return prisma.phaseArtifact.findFirst({
     where: { projectId, phase },
     orderBy: { version: "desc" },
   });
 }
 
-/**
- * Mark downstream phases DIRTY after an artifact is accepted.
- * This propagates the cascade.
- */
-export async function markDownstreamDirty(
-  projectId: string,
-  phase: Phase
-): Promise<Phase[]> {
+export async function markDownstreamDirty(projectId: string, phase: Phase): Promise<Phase[]> {
   const downstream = getDownstream(phase);
   const marked: Phase[] = [];
 

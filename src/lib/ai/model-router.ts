@@ -24,6 +24,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { logger } from "@/lib/logger";
+import { prisma } from "@/lib/prisma";
 
 const log = logger.child("model-router");
 
@@ -135,7 +136,6 @@ export type TaskCategory =
   | "classification"         // Signal classification, maturity scoring — fast, simple
   | "creative_writing"       // Story polishing, brief generation — prose quality
   | "blocker_strategy"       // Missile design, nuke strategy — organizational reasoning
-  | "adoption_planning"      // Onboarding playbooks, drip campaigns, wave strategy
   | "general";               // Fallback
 
 /**
@@ -164,21 +164,17 @@ const AGENT_TASK_MAP: Record<string, TaskCategory> = {
   InfrastructurePlanner: "code_generation",
   MonitoringPlanner: "technical_generation",
 
-  // Iteration
-  iterationPlanner: "strategic_planning",
-
   // Story
   StoryPolisher: "creative_writing",
+
+  // Build Log
+  BuildLogGenerator: "creative_writing",
 
   // Blockers — organizational reasoning
   "missile-designer": "blocker_strategy",
   "nuke-strategist": "blocker_strategy",
 
-  // Adoption — planning and enablement
-  "onboarding-playbook-generator": "adoption_planning",
   "integration-blueprint-generator": "code_generation",
-  "drip-campaign-designer": "adoption_planning",
-  "wide-adoption-strategist": "strategic_planning",
 };
 
 /**
@@ -206,9 +202,6 @@ const TASK_MODEL_PREFERENCE: Record<TaskCategory, string[]> = {
 
   // Claude excels at reasoning about organizational dynamics
   blocker_strategy: ["claude-sonnet-4-20250514", "gpt-4.1"],
-
-  // Mixed — Claude for strategy, GPT for structure
-  adoption_planning: ["claude-sonnet-4-20250514", "gpt-4.1"],
 
   // Fallback
   general: ["gpt-4.1", "claude-sonnet-4-20250514"],
@@ -463,6 +456,146 @@ async function completeAnthropic(req: CompletionRequest): Promise<CompletionResp
     },
     modelUsed: req.model.modelId,
     provider: "anthropic",
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Streaming completion API
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function* completeStreaming(req: CompletionRequest): AsyncGenerator<string> {
+  if (req.model.provider === "anthropic") {
+    yield* completeStreamingAnthropic(req);
+  } else {
+    yield* completeStreamingOpenAI(req);
+  }
+}
+
+async function* completeStreamingOpenAI(req: CompletionRequest): AsyncGenerator<string> {
+  const client = getOpenAIClient();
+  const stream = await client.chat.completions.create({
+    model: req.model.modelId,
+    messages: [
+      { role: "system", content: req.systemPrompt },
+      { role: "user", content: req.userPrompt },
+    ],
+    response_format: req.jsonMode ? { type: "json_object" } : undefined,
+    temperature: req.temperature ?? 0.1,
+    stream: true,
+  });
+
+  for await (const chunk of stream) {
+    const content = chunk.choices[0]?.delta?.content;
+    if (content) yield content;
+  }
+}
+
+async function* completeStreamingAnthropic(req: CompletionRequest): AsyncGenerator<string> {
+  const client = getAnthropicClient();
+  let systemPrompt = req.systemPrompt;
+  if (req.jsonMode) {
+    systemPrompt += "\n\nIMPORTANT: You MUST respond with ONLY valid JSON. No markdown, no code fences, no explanation text outside the JSON. Start your response with { and end with }.";
+  }
+
+  const stream = await client.messages.create({
+    model: req.model.modelId,
+    max_tokens: req.model.maxOutputTokens,
+    system: systemPrompt,
+    messages: [{ role: "user", content: req.userPrompt }],
+    temperature: req.temperature ?? 0.1,
+    stream: true,
+  });
+
+  for await (const event of stream) {
+    if (
+      event.type === "content_block_delta" &&
+      "text" in event.delta
+    ) {
+      yield (event.delta as { text: string }).text;
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Dynamic model routing with quality scoring
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function updateModelScore(
+  agentType: string,
+  modelId: string,
+  latencyMs: number,
+  tokenCost: number,
+  success: boolean,
+  zodAttempts: number,
+): Promise<void> {
+  const existing = await prisma.modelQualityScore.findUnique({
+    where: { agentType_modelId: { agentType, modelId } },
+  });
+
+  if (existing) {
+    const n = existing.sampleCount;
+    await prisma.modelQualityScore.update({
+      where: { agentType_modelId: { agentType, modelId } },
+      data: {
+        avgLatencyMs: (existing.avgLatencyMs * n + latencyMs) / (n + 1),
+        avgTokenCost: (existing.avgTokenCost * n + tokenCost) / (n + 1),
+        successRate: (existing.successRate * n + (success ? 1 : 0)) / (n + 1),
+        avgZodParseAttempts: (existing.avgZodParseAttempts * n + zodAttempts) / (n + 1),
+        sampleCount: n + 1,
+        lastUpdated: new Date(),
+      },
+    });
+  } else {
+    await prisma.modelQualityScore.create({
+      data: {
+        agentType,
+        modelId,
+        avgLatencyMs: latencyMs,
+        avgTokenCost: tokenCost,
+        successRate: success ? 1 : 0,
+        avgZodParseAttempts: zodAttempts,
+        sampleCount: 1,
+      },
+    });
+  }
+}
+
+export async function selectModelDynamic(
+  agentType: string,
+): Promise<RoutingDecision> {
+  const scores = await prisma.modelQualityScore.findMany({
+    where: { agentType },
+  });
+
+  const viable = scores.filter((s) => s.sampleCount >= 5);
+  if (viable.length === 0) return selectModel(agentType);
+
+  const scored = viable.map((s) => ({
+    modelId: s.modelId,
+    score:
+      s.successRate * 0.5 +
+      (1 / Math.max(s.avgLatencyMs, 1)) * 0.3 * 1000 +
+      (1 / Math.max(s.avgTokenCost, 0.0001)) * 0.2,
+  }));
+  scored.sort((a, b) => b.score - a.score);
+
+  const useExploration = Math.random() < 0.1 && scored.length > 1;
+  const pick = useExploration
+    ? scored[Math.floor(Math.random() * scored.length)]
+    : scored[0];
+
+  const model = MODELS[pick.modelId];
+  if (!model) return selectModel(agentType);
+
+  const fallbackEntry = scored.find((s) => s.modelId !== pick.modelId);
+  const fallback = fallbackEntry ? MODELS[fallbackEntry.modelId] ?? null : null;
+
+  return {
+    model,
+    reason: useExploration
+      ? `Epsilon exploration: ${pick.modelId} (score: ${pick.score.toFixed(4)})`
+      : `Dynamic routing: ${pick.modelId} (score: ${pick.score.toFixed(4)})`,
+    fallback,
   };
 }
 

@@ -39,12 +39,29 @@ export interface PullRequestResult {
   status: "open" | "merged" | "closed";
 }
 
+export interface RepoInfo {
+  name: string;
+  fullName: string;
+  htmlUrl: string;
+  defaultBranch: string;
+  private: boolean;
+}
+
+export interface RepoTreeEntry {
+  path: string;
+  type: "blob" | "tree";
+  size?: number;
+  sha: string;
+}
+
 export interface GitProvider {
   type: GitProviderType;
   createBranch(branchName: string): Promise<{ sha: string }>;
   commitFiles(branchName: string, files: FileCommit[], message: string): Promise<{ sha: string }>;
+  commitFilesAtomic(branchName: string, files: FileCommit[], message: string): Promise<{ sha: string }>;
   createPullRequest(branchName: string, title: string, body: string): Promise<PullRequestResult>;
   getPullRequest(prNumber: number): Promise<PullRequestResult>;
+  getRepoTree(branch?: string): Promise<RepoTreeEntry[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +173,96 @@ class GitHubProvider implements GitProvider {
       status: pr.merged ? "merged" : pr.state === "open" ? "open" : "closed",
     };
   }
+
+  /** Atomic multi-file commit via the Git Trees API (single commit, no race conditions). */
+  async commitFilesAtomic(branchName: string, files: FileCommit[], message: string): Promise<{ sha: string }> {
+    const ref = (await this.request(
+      "GET",
+      `/repos/${this.owner}/${this.repo}/git/ref/heads/${branchName}`
+    )) as { object: { sha: string } };
+    const parentSha = ref.object.sha;
+
+    const parentCommit = (await this.request(
+      "GET",
+      `/repos/${this.owner}/${this.repo}/git/commits/${parentSha}`
+    )) as { tree: { sha: string } };
+
+    const blobs = await Promise.all(
+      files.map(async (f) => {
+        const blob = (await this.request(
+          "POST",
+          `/repos/${this.owner}/${this.repo}/git/blobs`,
+          { content: Buffer.from(f.content, "utf-8").toString("base64"), encoding: "base64" }
+        )) as { sha: string };
+        return { path: f.path, mode: "100644" as const, type: "blob" as const, sha: blob.sha };
+      })
+    );
+
+    const tree = (await this.request(
+      "POST",
+      `/repos/${this.owner}/${this.repo}/git/trees`,
+      { base_tree: parentCommit.tree.sha, tree: blobs }
+    )) as { sha: string };
+
+    const commit = (await this.request(
+      "POST",
+      `/repos/${this.owner}/${this.repo}/git/commits`,
+      { message, tree: tree.sha, parents: [parentSha] }
+    )) as { sha: string };
+
+    await this.request(
+      "PATCH",
+      `/repos/${this.owner}/${this.repo}/git/refs/heads/${branchName}`,
+      { sha: commit.sha }
+    );
+
+    return { sha: commit.sha };
+  }
+
+  async getRepoTree(branch?: string): Promise<RepoTreeEntry[]> {
+    const b = branch ?? this.baseBranch;
+    const tree = (await this.request(
+      "GET",
+      `/repos/${this.owner}/${this.repo}/git/trees/${b}?recursive=1`
+    )) as { tree: Array<{ path: string; type: string; size?: number; sha: string }> };
+    return tree.tree.map((e) => ({
+      path: e.path,
+      type: e.type as "blob" | "tree",
+      size: e.size,
+      sha: e.sha,
+    }));
+  }
+
+  async createRepo(name: string, description: string, org?: string): Promise<RepoInfo> {
+    const endpoint = org ? `/orgs/${org}/repos` : "/user/repos";
+    const repo = (await this.request("POST", endpoint, {
+      name,
+      description,
+      private: false,
+      auto_init: true,
+    })) as { name: string; full_name: string; html_url: string; default_branch: string; private: boolean };
+    return {
+      name: repo.name,
+      fullName: repo.full_name,
+      htmlUrl: repo.html_url,
+      defaultBranch: repo.default_branch,
+      private: repo.private,
+    };
+  }
+
+  async getRepoInfo(): Promise<RepoInfo> {
+    const repo = (await this.request(
+      "GET",
+      `/repos/${this.owner}/${this.repo}`
+    )) as { name: string; full_name: string; html_url: string; default_branch: string; private: boolean };
+    return {
+      name: repo.name,
+      fullName: repo.full_name,
+      htmlUrl: repo.html_url,
+      defaultBranch: repo.default_branch,
+      private: repo.private,
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +369,19 @@ class GitLabProvider implements GitProvider {
       status: mr.state === "opened" ? "open" : mr.state === "merged" ? "merged" : "closed",
     };
   }
+
+  async commitFilesAtomic(branchName: string, files: FileCommit[], message: string): Promise<{ sha: string }> {
+    return this.commitFiles(branchName, files, message);
+  }
+
+  async getRepoTree(branch?: string): Promise<RepoTreeEntry[]> {
+    const b = branch ?? this.baseBranch;
+    const tree = (await this.request(
+      "GET",
+      `/projects/${this.projectPath}/repository/tree?ref=${b}&recursive=true&per_page=100`
+    )) as Array<{ path: string; type: string; id: string }>;
+    return tree.map((e) => ({ path: e.path, type: e.type === "tree" ? "tree" as const : "blob" as const, sha: e.id }));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -366,6 +486,18 @@ class BitbucketProvider implements GitProvider {
       status: pr.state === "OPEN" ? "open" : pr.state === "MERGED" ? "merged" : "closed",
     };
   }
+
+  async commitFilesAtomic(branchName: string, files: FileCommit[], message: string): Promise<{ sha: string }> {
+    return this.commitFiles(branchName, files, message);
+  }
+
+  async getRepoTree(): Promise<RepoTreeEntry[]> {
+    const resp = (await this.request(
+      "GET",
+      `/repositories/${this.owner}/${this.repo}/src/${this.baseBranch}/?pagelen=100`
+    )) as { values: Array<{ path: string; type: string; size?: number; commit: { hash: string } }> };
+    return resp.values.map((e) => ({ path: e.path, type: e.type === "commit_directory" ? "tree" as const : "blob" as const, size: e.size, sha: e.commit.hash }));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -445,4 +577,84 @@ ${fileList}
 
   log.info("PR created", { url: pr.url, number: pr.number });
   return pr;
+}
+
+/**
+ * Push a full set of files to a repo via atomic commit and open a PR.
+ * Used for pushing the complete engagement package (collections, CI/CD, IaC, tests, docs).
+ */
+export async function pushFilesToRepo(
+  config: GitProviderConfig,
+  files: Array<{ path: string; content: string }>,
+  options?: { branchSuffix?: string; commitMessage?: string; prTitle?: string; prBody?: string }
+): Promise<PullRequestResult> {
+  const provider = createGitProvider(config);
+  const branch = `cortexlab-delivery-${options?.branchSuffix ?? Date.now()}`;
+  const commitMsg = options?.commitMessage ?? `feat: CortexLab engagement delivery\n\nPushed ${files.length} files from CortexLab pipeline.`;
+
+  log.info("Pushing engagement package", { branch, fileCount: files.length });
+
+  await provider.createBranch(branch);
+
+  const fileCommits: FileCommit[] = files.map((f) => ({ path: f.path, content: f.content }));
+  await provider.commitFilesAtomic(branch, fileCommits, commitMsg);
+
+  const dirSummary = new Map<string, number>();
+  for (const f of files) {
+    const dir = f.path.includes("/") ? f.path.split("/").slice(0, -1).join("/") + "/" : "/";
+    dirSummary.set(dir, (dirSummary.get(dir) ?? 0) + 1);
+  }
+  const dirList = [...dirSummary.entries()].map(([d, c]) => `- \`${d}\` (${c} files)`).join("\n");
+
+  const prBody = options?.prBody ?? `## CortexLab Engagement Delivery
+
+This PR contains the complete engagement package generated by the CortexLab pipeline.
+
+### Directory Structure
+${dirList}
+
+### Contents
+- **Postman Collections** — API collections ready for import
+- **Newman Configs** — CLI test runner configurations
+- **CI/CD Pipelines** — Platform-specific pipeline configs
+- **Infrastructure** — IaC templates and container manifests
+- **Test Scripts** — Postman test scripts for contract/smoke/integration testing
+- **Documentation** — Phase-by-phase documentation and build log
+
+### Next Steps
+1. Review and merge this PR
+2. Configure CI/CD secrets (\`POSTMAN_API_KEY\`, etc.)
+3. Run the pipeline to validate
+
+---
+*Generated by CortexLab*`;
+
+  const pr = await provider.createPullRequest(
+    branch,
+    options?.prTitle ?? "feat: CortexLab engagement delivery",
+    prBody
+  );
+
+  log.info("Delivery PR created", { url: pr.url, number: pr.number });
+  return pr;
+}
+
+/**
+ * Create a new repository via the GitHub API.
+ */
+export async function createGitHubRepo(
+  token: string,
+  repoName: string,
+  description: string,
+  org?: string,
+  apiUrl?: string
+): Promise<RepoInfo> {
+  const provider = new GitHubProvider({
+    type: "github",
+    token,
+    repoOwner: org ?? "",
+    repoName: "",
+    apiUrl,
+  });
+  return provider.createRepo(repoName, description, org);
 }

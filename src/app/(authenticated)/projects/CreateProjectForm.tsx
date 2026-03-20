@@ -1,14 +1,57 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, startTransition } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { createProjectAction } from "@/lib/actions/projects";
 import { SubmitButton } from "@/components/SubmitButton";
 
+const createProjectSchema = z.object({
+  name: z.string().min(2, "Project name must be at least 2 characters").max(100, "Project name is too long"),
+  primaryDomain: z.string().optional().refine(
+    (val) => !val || /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(val),
+    { message: "Enter a valid domain (e.g. acme.com)" }
+  ),
+  apiDomain: z.string().optional().refine(
+    (val) => !val || /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(val),
+    { message: "Enter a valid domain (e.g. api.acme.com)" }
+  ),
+  publicWorkspaceUrl: z.string().optional().refine(
+    (val) => !val || val.startsWith("http"),
+    { message: "Must be a valid URL starting with http" }
+  ),
+  customerDomain: z.string().optional(),
+  jiraProjectKey: z.string().optional().refine(
+    (val) => !val || /^[A-Z][A-Z0-9_]+$/.test(val.toUpperCase()),
+    { message: "Jira key must be uppercase letters/numbers (e.g. CSEBOOT)" }
+  ),
+});
+
+type FormValues = z.infer<typeof createProjectSchema>;
+
+const errorStyle = { color: "#f87171", fontSize: "11px", marginTop: 4 } as const;
+
 export function CreateProjectForm() {
   const [state, action] = useActionState(createProjectAction, null);
+  const {
+    register,
+    formState: { errors },
+    trigger,
+  } = useForm<FormValues>({
+    resolver: zodResolver(createProjectSchema),
+    mode: "onBlur",
+  });
 
   return (
-    <form action={action} className="card">
+    <form
+      action={async (formData: FormData) => {
+        const valid = await trigger();
+        if (!valid) return;
+        startTransition(() => action(formData));
+      }}
+      className="card"
+    >
       <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--foreground)" }}>
         New Project
       </h2>
@@ -29,19 +72,52 @@ export function CreateProjectForm() {
       <div className="space-y-4">
         <div>
           <label htmlFor="name" className="label">Project Name *</label>
-          <input id="name" name="name" type="text" required className="input-field" placeholder="Acme Corp" />
+          <input
+            id="name"
+            type="text"
+            required
+            className="input-field"
+            placeholder="Acme Corp"
+            {...register("name")}
+            style={errors.name ? { borderColor: "#f87171" } : undefined}
+          />
+          {errors.name && <p style={errorStyle}>{errors.name.message}</p>}
         </div>
         <div>
           <label htmlFor="primaryDomain" className="label">Primary Domain</label>
-          <input id="primaryDomain" name="primaryDomain" type="text" className="input-field" placeholder="acme.com" />
+          <input
+            id="primaryDomain"
+            type="text"
+            className="input-field"
+            placeholder="acme.com"
+            {...register("primaryDomain")}
+            style={errors.primaryDomain ? { borderColor: "#f87171" } : undefined}
+          />
+          {errors.primaryDomain && <p style={errorStyle}>{errors.primaryDomain.message}</p>}
         </div>
         <div>
           <label htmlFor="apiDomain" className="label">API Domain</label>
-          <input id="apiDomain" name="apiDomain" type="text" className="input-field" placeholder="api.acme.com" />
+          <input
+            id="apiDomain"
+            type="text"
+            className="input-field"
+            placeholder="api.acme.com"
+            {...register("apiDomain")}
+            style={errors.apiDomain ? { borderColor: "#f87171" } : undefined}
+          />
+          {errors.apiDomain && <p style={errorStyle}>{errors.apiDomain.message}</p>}
         </div>
         <div>
           <label htmlFor="publicWorkspaceUrl" className="label">Public Workspace URL</label>
-          <input id="publicWorkspaceUrl" name="publicWorkspaceUrl" type="text" className="input-field" placeholder="https://www.postman.com/acme/workspace/..." />
+          <input
+            id="publicWorkspaceUrl"
+            type="text"
+            className="input-field"
+            placeholder="https://www.postman.com/acme/workspace/..."
+            {...register("publicWorkspaceUrl")}
+            style={errors.publicWorkspaceUrl ? { borderColor: "#f87171" } : undefined}
+          />
+          {errors.publicWorkspaceUrl && <p style={errorStyle}>{errors.publicWorkspaceUrl.message}</p>}
         </div>
 
         <div
@@ -58,10 +134,10 @@ export function CreateProjectForm() {
             <label htmlFor="customerDomain" className="label">Customer Email Domain</label>
             <input
               id="customerDomain"
-              name="customerDomain"
               type="text"
               className="input-field"
               placeholder="acme.com"
+              {...register("customerDomain")}
             />
             <p className="text-[11px] mt-1" style={{ color: "var(--foreground-dim)" }}>
               If Gmail is connected, a filter will auto-capture emails from this domain into the project.
@@ -85,11 +161,13 @@ export function CreateProjectForm() {
             <label htmlFor="jiraProjectKey" className="label">Jira Project Key</label>
             <input
               id="jiraProjectKey"
-              name="jiraProjectKey"
               type="text"
               className="input-field uppercase"
               placeholder="e.g. CSEBOOT"
+              {...register("jiraProjectKey")}
+              style={errors.jiraProjectKey ? { borderColor: "#f87171" } : undefined}
             />
+            {errors.jiraProjectKey && <p style={errorStyle}>{errors.jiraProjectKey.message}</p>}
             <p className="text-[11px] mt-1" style={{ color: "var(--foreground-dim)" }}>
               If Jira is connected, a ticket will be auto-created in this project. Leave blank to use your default.
             </p>

@@ -10,6 +10,7 @@ export interface SessionData {
   email?: string;
   name?: string;
   isAdmin?: boolean;
+  role?: string;
 }
 
 export const SESSION_COOKIE_NAME = "ai-pipeline-session";

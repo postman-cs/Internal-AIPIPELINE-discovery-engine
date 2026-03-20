@@ -21,6 +21,7 @@ import { Phase, AssumptionStatus } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import type { AssumptionItem, VerifiedAssumptionConstraint } from "@/lib/ai/agents/topologyTypes";
 import { logger } from "@/lib/logger";
+import { retrieveEvidence } from "@/lib/ai/retrieval";
 
 const log = logger.child("assumptions.engine");
 
@@ -154,23 +155,24 @@ export async function persistPhaseAssumptions(
       continue;
     }
 
-    // Check if any verified claim across any phase matches this category
+    // Auto-verify if this category has ANY verified/corrected claim in any phase.
+    // Category-level verification: once a human confirms "auth_pattern" in
+    // DISCOVERY, all subsequent "auth_pattern" assumptions across other phases
+    // are auto-verified — the human has already weighed in on this topic.
     const priorVerifications = verifiedByCategory.get(assumption.category) ?? [];
     let status: AssumptionStatus = "PENDING";
     let matchedResponse: string | null = null;
 
-    for (const prior of priorVerifications) {
-      const claimSimilar = normalizeForComparison(assumption.claim) ===
-        normalizeForComparison(prior.claim);
-      if (claimSimilar) {
-        status = "AUTO_VERIFIED";
-        matchedResponse = prior.response;
-        log.info("Auto-verified assumption from prior verification", {
-          category: assumption.category,
-          phase,
-        });
-        break;
-      }
+    if (priorVerifications.length > 0) {
+      // Category has been verified in at least one phase — auto-verify
+      const bestMatch = priorVerifications[0];
+      status = "AUTO_VERIFIED";
+      matchedResponse = bestMatch.response;
+      log.info("Auto-verified assumption — category previously verified", {
+        category: assumption.category,
+        phase,
+        priorCount: priorVerifications.length,
+      });
     }
 
     try {
@@ -514,7 +516,7 @@ export async function getVerificationSummary(
       category: a.category,
       claim: a.claim,
       impact: a.impact,
-      blocksPhases: (a.blocksPhases as string[]) ?? [],
+      blocksPhases: Array.isArray(a.blocksPhases) ? (a.blocksPhases as string[]) : [],
     }));
 
   return {
@@ -529,12 +531,67 @@ export async function getVerificationSummary(
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Auto-Verification via Evidence Matching
 // ---------------------------------------------------------------------------
 
-function normalizeForComparison(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, " ").trim();
+/**
+ * For each assumption, vector-search the evidence base using the claim text.
+ * If top-3 results have similarity > 0.85, auto-set status to AUTO_VERIFIED.
+ *
+ * Should be called after assumptions are persisted via `persistPhaseAssumptions`.
+ */
+export async function autoVerifyAssumptions(
+  projectId: string,
+  assumptions: AssumptionItem[],
+): Promise<string[]> {
+  const verifiedIds: string[] = [];
+
+  for (const assumption of assumptions) {
+    try {
+      const results = await retrieveEvidence(projectId, assumption.claim, 3);
+      const highSimilarity = results.filter((r) => r.score > 0.85);
+
+      if (highSimilarity.length > 0) {
+        const record = await prisma.assumption.findFirst({
+          where: {
+            projectId,
+            category: assumption.category,
+            claim: assumption.claim,
+            status: "PENDING",
+          },
+        });
+
+        if (record) {
+          await prisma.assumption.update({
+            where: { id: record.id },
+            data: {
+              status: "AUTO_VERIFIED",
+              verifiedBy: "EVIDENCE_MATCH",
+              verifiedAt: new Date(),
+              humanResponse: `Auto-verified: ${highSimilarity.length} evidence chunk(s) match with similarity > 0.85`,
+            },
+          });
+          verifiedIds.push(record.id);
+          log.info("Auto-verified assumption via evidence match", {
+            category: assumption.category,
+            matchCount: highSimilarity.length,
+          });
+        }
+      }
+    } catch (err) {
+      log.warn("Auto-verify skipped for assumption", {
+        category: assumption.category,
+        error: err instanceof Error ? err.message : "Unknown error",
+      });
+    }
+  }
+
+  return verifiedIds;
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 /**
  * Determine which assumption categories are most critical for a given phase.
@@ -551,8 +608,7 @@ export function getCriticalCategoriesForPhase(phase: Phase): string[] {
     CRAFT_SOLUTION: ["ci_cd_platform", "environment_topology", "technology_stack"],
     TEST_SOLUTION: ["environment_topology", "testing_maturity"],
     DEPLOYMENT_PLAN: ["deployment_model", "environment_topology", "migration_constraint", "team_structure"],
-    MONITORING: ["scale_requirements", "business_priority"],
-    ITERATION: ["business_priority", "governance_posture"],
+    BUILD_LOG: ["business_priority", "scale_requirements"],
   };
 
   return map[phase] ?? ["other"];

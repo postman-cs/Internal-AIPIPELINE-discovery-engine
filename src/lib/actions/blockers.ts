@@ -159,6 +159,12 @@ export async function updateBlockerStatusAction(
     notes
   );
 
+  if (result.success && (status === "NEUTRALIZED" || status === "ACCEPTED")) {
+    import("@/lib/gamification/xp-engine").then(({ awardXp, XP_ACTIONS }) => {
+      awardXp(session.userId, XP_ACTIONS.BLOCKER_RESOLVED.action, XP_ACTIONS.BLOCKER_RESOLVED.points, blocker.projectId).catch(() => {});
+    }).catch(() => {});
+  }
+
   if (result.success) {
     revalidateBlockerPaths(blocker.projectId);
   }

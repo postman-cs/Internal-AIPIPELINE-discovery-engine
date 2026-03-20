@@ -29,7 +29,7 @@ export class NotFoundError extends Error {
  */
 export async function requireProjectAccess(projectId: string): Promise<{
   session: SessionData & { userId: string };
-  project: { id: string; name: string; ownerUserId: string };
+  project: { id: string; name: string; ownerUserId: string | null };
 }> {
   const session = await requireAuth();
 

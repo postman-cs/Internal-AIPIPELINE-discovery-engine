@@ -84,7 +84,7 @@ export const reconSynthesizerOutputSchema = z.object({
   companySnapshot: z.object({
     industry: z.string(),
     engineeringSize: z.string(),
-    publicApiPresence: z.enum(["Yes", "No", "Partial"]),
+    publicApiPresence: z.enum(["Yes", "No", "Partial", "Unknown"]),
     summary: z.string(),
     evidenceIds: z.array(z.string()),
   }),

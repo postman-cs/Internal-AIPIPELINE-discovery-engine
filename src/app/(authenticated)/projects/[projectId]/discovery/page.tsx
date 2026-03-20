@@ -8,7 +8,11 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { DiscoveryForm } from "./DiscoveryForm";
 import { AIPipelinePanel } from "./AIPipelinePanel";
+import { ServiceTemplateInput } from "./ServiceTemplateInput";
 import { DiscoveryArtifactInput } from "@/lib/schemas";
+import { getServiceTemplate } from "@/lib/actions/projects";
+import { RunCascadeButton } from "../RunCascadeButton";
+import { BlackHoleWrapper } from "./BlackHoleWrapper";
 
 export default async function DiscoveryPage({
   params,
@@ -20,7 +24,7 @@ export default async function DiscoveryPage({
 
   if (!project) notFound();
 
-  const [artifact, evidenceStats, assumptionCount, recentRuns] = await Promise.all([
+  const [artifact, evidenceStats, assumptionCount, recentRuns, serviceTemplate, cascadePhases, evidenceBySource] = await Promise.all([
     getLatestDiscoveryArtifact(projectId),
     getProjectEvidenceStats(projectId),
     prisma.assumption.count({ where: { projectId, status: "PENDING" } }),
@@ -30,7 +34,30 @@ export default async function DiscoveryPage({
       take: 5,
       select: { agentType: true, status: true, durationMs: true, createdAt: true, model: true },
     }),
+    getServiceTemplate(projectId),
+    prisma.phaseArtifact.findMany({
+      where: { projectId },
+      select: { phase: true, status: true },
+      distinct: ["phase"],
+    }),
+    prisma.sourceDocument.groupBy({
+      by: ["sourceType"],
+      where: { projectId },
+      _count: true,
+    }),
   ]);
+
+  const evidenceCounts: Record<string, number> = {};
+  for (const row of evidenceBySource) {
+    evidenceCounts[row.sourceType] = row._count;
+  }
+
+  const hasCascadeRun = cascadePhases.some(
+    (a) => a.status === "CLEAN" || a.status === "CLEAN_WITH_EXCEPTIONS",
+  );
+  const hasServiceTemplate = !!serviceTemplate?.serviceTemplateContent;
+  const hasDiscovery = !!artifact;
+  const cascadeReady = hasServiceTemplate && hasDiscovery;
 
   const defaults: DiscoveryArtifactInput | undefined = artifact
     ? {
@@ -93,10 +120,11 @@ export default async function DiscoveryPage({
         <div className="flex items-center gap-1 overflow-x-auto pb-1">
           {[
             { label: "Evidence", done: evidenceStats.chunkCount > 0, color: "#22c55e", count: evidenceStats.chunkCount },
+            { label: "Service Template", done: !!serviceTemplate?.serviceTemplateContent, color: "#a78bfa", count: null },
             { label: "CortexLab", done: !!artifact?.aiGenerated, color: "#06d6d6", count: recentRuns.filter((r) => r.status === "SUCCESS").length },
             { label: "Discovery Brief", done: !!artifact, color: "#34d399", count: artifact?.version ?? 0 },
             { label: "Assumptions", done: assumptionCount === 0 && !!artifact, color: assumptionCount > 0 ? "#fbbf24" : "#34d399", count: assumptionCount },
-            { label: "Cascade", done: false, color: "var(--foreground-dim)", count: null },
+            { label: "Cascade", done: hasCascadeRun, color: hasCascadeRun ? "#3b82f6" : cascadeReady ? "#60a5fa" : "var(--foreground-dim)", count: cascadePhases.length > 0 ? cascadePhases.length : null },
           ].map((step, i, arr) => (
             <div key={step.label} className="flex items-center shrink-0">
               <div className="flex flex-col items-center gap-1">
@@ -145,12 +173,32 @@ export default async function DiscoveryPage({
         </Link>
       )}
 
-      <AIPipelinePanel
+      {/* Black Hole — Evidence Singularity */}
+      <div className="mb-6">
+        <BlackHoleWrapper
+          evidenceCounts={evidenceCounts}
+          totalChunks={evidenceStats.chunkCount}
+        />
+      </div>
+
+      <ServiceTemplateInput
         projectId={projectId}
-        evidenceStats={evidenceStats}
-        hasArtifact={!!artifact}
-        latestVersion={artifact?.version || 0}
+        existing={serviceTemplate ? {
+          content: serviceTemplate.serviceTemplateContent,
+          type: serviceTemplate.serviceTemplateType,
+          fileName: serviceTemplate.serviceTemplateFileName,
+          notes: serviceTemplate.serviceTemplateNotes,
+        } : null}
       />
+
+      <div className="mt-6">
+        <AIPipelinePanel
+          projectId={projectId}
+          evidenceStats={evidenceStats}
+          hasArtifact={!!artifact}
+          latestVersion={artifact?.version || 0}
+        />
+      </div>
 
       {/* Recent AI runs from discovery agents */}
       {recentRuns.length > 0 && (
@@ -173,6 +221,58 @@ export default async function DiscoveryPage({
                 </span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Run Cascade CTA — visible after service template + discovery */}
+      {cascadeReady && (
+        <div
+          className="mt-6 rounded-xl p-5 flex items-center justify-between"
+          style={{
+            background: hasCascadeRun
+              ? "linear-gradient(135deg, rgba(16,185,129,0.06), rgba(59,130,246,0.06))"
+              : "linear-gradient(135deg, rgba(59,130,246,0.08), rgba(139,92,246,0.08))",
+            border: `1px solid ${hasCascadeRun ? "rgba(16,185,129,0.2)" : "rgba(59,130,246,0.2)"}`,
+          }}
+        >
+          <div className="flex items-center gap-3">
+            <div
+              className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
+              style={{
+                background: hasCascadeRun ? "rgba(16,185,129,0.12)" : "rgba(59,130,246,0.12)",
+              }}
+            >
+              <svg
+                className="w-5 h-5"
+                style={{ color: hasCascadeRun ? "#34d399" : "#60a5fa" }}
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M9.172 14.828a4 4 0 010-5.656m5.656 0a4 4 0 010 5.656M12 12h.008v.008H12V12z" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>
+                {hasCascadeRun
+                  ? `Cascade complete — ${cascadePhases.length} phases generated`
+                  : "Ready to run the AI Cascade"}
+              </p>
+              <p className="text-xs" style={{ color: "var(--foreground-dim)" }}>
+                {hasCascadeRun
+                  ? "Re-run to regenerate phases with latest discovery data"
+                  : "Service template and discovery are ready — generate all 9 pipeline phases"}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <Link
+              href={`/projects/${projectId}/updates`}
+              className="text-xs"
+              style={{ color: "var(--foreground-dim)" }}
+            >
+              View phases →
+            </Link>
+            <RunCascadeButton projectId={projectId} />
           </div>
         </div>
       )}

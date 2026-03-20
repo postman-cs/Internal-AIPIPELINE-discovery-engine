@@ -13,7 +13,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { hashPrompt } from "@/lib/ai/openai";
-import { selectModel, completeWithFallback } from "@/lib/ai/model-router";
+import { selectModelDynamic, completeWithFallback, updateModelScore } from "@/lib/ai/model-router";
 import type { ModelSpec } from "@/lib/ai/model-router";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
@@ -85,6 +85,14 @@ political, process, knowledge, security, licensing, cultural),
 Be selective: 0-1 blockers per phase. Only real, evidence-backed obstacles.
 `;
 
+const CITATION_INSTRUCTION = `
+
+CITATION REQUIREMENT:
+When referencing evidence, cite it inline using [EVIDENCE-N] labels (e.g. [EVIDENCE-1], [EVIDENCE-3]).
+Every factual claim must reference the specific evidence chunk that supports it.
+This enables downstream verification and accuracy scoring of your analysis.
+`;
+
 export async function runAgent<T>(
   config: AgentRunConfig<T>
 ): Promise<AgentRunResult<T>> {
@@ -101,7 +109,7 @@ export async function runAgent<T>(
     modelSpec = MODELS[config.forceModel] ?? MODELS["gpt-4.1"];
     routingReason = `Forced: ${config.forceModel}`;
   } else {
-    const decision = selectModel(agentType);
+    const decision = await selectModelDynamic(agentType);
     modelSpec = decision.model;
     fallbackSpec = decision.fallback;
     routingReason = decision.reason;
@@ -118,7 +126,8 @@ export async function runAgent<T>(
   }
 
   const extractionBlock = config.skipAssumptionExtraction ? "" : ASSUMPTION_EXTRACTION_PROMPT;
-  const enhancedSystemPrompt = systemPrompt + extractionBlock + constraintBlock;
+  const citationBlock = config.skipAssumptionExtraction ? "" : CITATION_INSTRUCTION;
+  const enhancedSystemPrompt = systemPrompt + extractionBlock + citationBlock + constraintBlock;
   const fullPrompt = enhancedSystemPrompt + "\n\n" + userPrompt;
   const pHash = hashPrompt(fullPrompt);
 
@@ -249,17 +258,61 @@ export async function runAgent<T>(
     delete parsedObj.detectedBlockers;
 
     // ── Validate with Zod (with auto-unwrap fallback) ────────────────────
-    // LLMs sometimes: (a) wrap output in a key like { "nuke_strategy": {...} },
-    // (b) split fields across top-level keys and nested objects, or
-    // (c) return correct keys but with extra bonus fields.
-    // We try increasingly aggressive strategies until one passes.
-    const validated = resilientZodParse(outputSchema, parsedObj, agentType);
+    let parseResult = resilientZodParse(outputSchema, parsedObj, agentType);
+    let zodAttempts = parseResult.attempts;
+    const messageHistory: Array<{ role: string; content: string }> = [
+      { role: "system", content: enhancedSystemPrompt.slice(0, 500) + "..." },
+      { role: "user", content: userPrompt.slice(0, 500) + "..." },
+      { role: "assistant", content: rawContent.slice(0, 2000) + "..." },
+    ];
 
     const tokenUsage = {
       prompt: response.usage.promptTokens,
       completion: response.usage.completionTokens,
       total: response.usage.totalTokens,
     };
+
+    // ── Multi-turn correction on Zod failure ──────────────────────────────
+    let correctionTurn = 0;
+    while (!parseResult.success && correctionTurn < 3) {
+      correctionTurn++;
+      const errorList = parseResult.errors?.join("\n- ") ?? "Unknown validation error";
+      const correctionPrompt = `Your previous JSON response failed schema validation. Fix these issues and return corrected valid JSON:\n- ${errorList}`;
+      messageHistory.push({ role: "user", content: correctionPrompt });
+
+      const correctionResponse = await completeWithFallback(
+        { model: modelSpec, systemPrompt: enhancedSystemPrompt, userPrompt: correctionPrompt, temperature: 0.1, jsonMode: true },
+        fallbackSpec,
+      );
+      messageHistory.push({ role: "assistant", content: correctionResponse.content.slice(0, 2000) + "..." });
+
+      tokenUsage.prompt += correctionResponse.usage.promptTokens;
+      tokenUsage.completion += correctionResponse.usage.completionTokens;
+      tokenUsage.total += correctionResponse.usage.totalTokens;
+
+      let correctedObj: Record<string, unknown>;
+      try {
+        correctedObj = JSON.parse(correctionResponse.content) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      delete correctedObj.assumptions;
+      delete correctedObj.detectedBlockers;
+
+      parseResult = resilientZodParse(outputSchema, correctedObj, agentType);
+      zodAttempts += parseResult.attempts;
+    }
+
+    if (!parseResult.success) {
+      throw new Error(
+        `${agentType}: Zod validation failed after ${correctionTurn + 1} turn(s) — ${parseResult.errors?.join("; ")}`,
+      );
+    }
+
+    const validated = parseResult.data!;
+
+    // ── Citation accuracy ──────────────────────────────────────────────
+    const citationAccuracy = computeCitationAccuracy(parsedObj, userPrompt);
 
     // ── Update AIRun with success ───────────────────────────────────────
     await prisma.aIRun.update({
@@ -270,8 +323,19 @@ export async function runAgent<T>(
         outputJson: parsed as Prisma.InputJsonValue,
         tokenUsage: tokenUsage as unknown as Prisma.InputJsonValue,
         durationMs,
+        messagesJson: messageHistory as unknown as Prisma.InputJsonValue,
+        citationAccuracy,
+        zodParseAttempts: zodAttempts,
       },
     });
+
+    // ── Update model quality score ──────────────────────────────────────
+    const tokenCost =
+      (tokenUsage.prompt / 1000) * modelSpec.costPer1kInput +
+      (tokenUsage.completion / 1000) * modelSpec.costPer1kOutput;
+    try {
+      await updateModelScore(agentType, modelSpec.modelId, durationMs, tokenCost, true, zodAttempts);
+    } catch { /* non-fatal */ }
 
     return {
       output: validated,
@@ -307,6 +371,10 @@ export async function runAgent<T>(
       },
     });
 
+    try {
+      await updateModelScore(agentType, modelSpec.modelId, durationMs, 0, false, 0);
+    } catch { /* non-fatal */ }
+
     throw error;
   }
 }
@@ -315,18 +383,27 @@ export async function runAgent<T>(
 // Resilient Zod parsing with multiple unwrapping strategies
 // ---------------------------------------------------------------------------
 
+interface ZodParseResult<T> {
+  success: boolean;
+  data?: T;
+  errors?: string[];
+  attempts: number;
+}
+
 function resilientZodParse<T>(
   schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   obj: Record<string, unknown>,
-  agentType: string,
-): T {
+  _agentType: string,
+): ZodParseResult<T> {
+  let attempts = 0;
+
   // Strategy 0: direct parse
+  attempts++;
   const direct = schema.safeParse(obj);
-  if (direct.success) return direct.data as T;
+  if (direct.success) return { success: true, data: direct.data as T, attempts };
 
   const keys = Object.keys(obj);
 
-  // Separate nested objects from primitive/array top-level values
   const nestedKeys: string[] = [];
   const flatKeys: string[] = [];
   for (const k of keys) {
@@ -340,11 +417,12 @@ function resilientZodParse<T>(
 
   // Strategy 1: try each nested object as-is
   for (const k of nestedKeys) {
+    attempts++;
     const r = schema.safeParse(obj[k]);
-    if (r.success) return r.data as T;
+    if (r.success) return { success: true, data: r.data as T, attempts };
   }
 
-  // Strategy 2a: merge largest nested object + top-level siblings (prefer nested values)
+  // Strategy 2a: merge largest nested object + top-level siblings
   if (nestedKeys.length > 0) {
     const sorted = [...nestedKeys].sort(
       (a, b) => Object.keys(obj[b] as object).length - Object.keys(obj[a] as object).length,
@@ -354,19 +432,21 @@ function resilientZodParse<T>(
     for (const k of keys) {
       if (k !== sorted[0] && !(k in merged)) merged[k] = obj[k];
     }
+    attempts++;
     const r = schema.safeParse(merged);
-    if (r.success) return r.data as T;
+    if (r.success) return { success: true, data: r.data as T, attempts };
 
-    // Strategy 2b: same merge but prefer top-level siblings over nested values
+    // Strategy 2b: prefer top-level siblings over nested values
     const merged2: Record<string, unknown> = { ...best };
     for (const k of keys) {
-      if (k !== sorted[0]) merged2[k] = obj[k]; // overwrite
+      if (k !== sorted[0]) merged2[k] = obj[k];
     }
+    attempts++;
     const r2 = schema.safeParse(merged2);
-    if (r2.success) return r2.data as T;
+    if (r2.success) return { success: true, data: r2.data as T, attempts };
   }
 
-  // Strategy 3: deep flatten — merge ALL nested objects into one + top-level primitives
+  // Strategy 3: deep flatten
   if (nestedKeys.length > 1) {
     const flat: Record<string, unknown> = {};
     for (const k of nestedKeys) {
@@ -375,11 +455,12 @@ function resilientZodParse<T>(
     for (const k of flatKeys) {
       flat[k] = obj[k];
     }
+    attempts++;
     const r = schema.safeParse(flat);
-    if (r.success) return r.data as T;
+    if (r.success) return { success: true, data: r.data as T, attempts };
   }
 
-  // Strategy 4: gather all candidate values from every level into one object
+  // Strategy 4: gather all candidate values from every level
   const allValues: Record<string, unknown> = { ...obj };
   for (const k of nestedKeys) {
     const inner = obj[k] as Record<string, unknown>;
@@ -388,18 +469,16 @@ function resilientZodParse<T>(
     }
   }
   if (Object.keys(allValues).length > keys.length) {
+    attempts++;
     const r = schema.safeParse(allValues);
-    if (r.success) return r.data as T;
+    if (r.success) return { success: true, data: r.data as T, attempts };
   }
 
-  // Strategy 5: recursive deep flatten — collect ALL leaf values from every
-  // nesting level into one flat object (handles 2+ levels of wrapping)
+  // Strategy 5: recursive deep flatten
   const deepFlat: Record<string, unknown> = {};
   function collectLeaves(o: Record<string, unknown>) {
     for (const [k, v] of Object.entries(o)) {
       if (v && typeof v === "object" && !Array.isArray(v)) {
-        // If this key doesn't exist yet OR the existing value isn't a primitive,
-        // recurse. But also keep the nested object itself in case the schema wants it.
         if (!(k in deepFlat)) deepFlat[k] = v;
         collectLeaves(v as Record<string, unknown>);
       } else {
@@ -409,11 +488,12 @@ function resilientZodParse<T>(
   }
   collectLeaves(obj);
   if (Object.keys(deepFlat).length > Object.keys(allValues).length) {
+    attempts++;
     const r = schema.safeParse(deepFlat);
-    if (r.success) return r.data as T;
+    if (r.success) return { success: true, data: r.data as T, attempts };
   }
 
-  // Strategy 5b: same recursive flatten but prefer primitives over objects for same key
+  // Strategy 5b: prefer primitives over objects for same key
   const deepFlat2: Record<string, unknown> = {};
   function collectPrimitiveFirst(o: Record<string, unknown>) {
     for (const [k, v] of Object.entries(o)) {
@@ -421,23 +501,44 @@ function resilientZodParse<T>(
         collectPrimitiveFirst(v as Record<string, unknown>);
         if (!(k in deepFlat2)) deepFlat2[k] = v;
       } else {
-        deepFlat2[k] = v; // always prefer primitives/arrays
+        deepFlat2[k] = v;
       }
     }
   }
   collectPrimitiveFirst(obj);
   {
+    attempts++;
     const r = schema.safeParse(deepFlat2);
-    if (r.success) return r.data as T;
+    if (r.success) return { success: true, data: r.data as T, attempts };
   }
 
-  // All strategies exhausted — build a detailed error message
+  // All strategies exhausted
   const zodErrors = direct.error.issues
     .slice(0, 8)
-    .map((i) => `${i.path.join(".")}: ${i.message}`)
-    .join("; ");
+    .map((i) => `${i.path.join(".")}: ${i.message}`);
 
-  throw new Error(
-    `${agentType}: Zod validation failed — ${zodErrors} (keys: ${keys.join(", ")})`
+  return { success: false, errors: zodErrors, attempts };
+}
+
+// ---------------------------------------------------------------------------
+// Citation accuracy computation
+// ---------------------------------------------------------------------------
+
+function computeCitationAccuracy(
+  output: Record<string, unknown>,
+  userPrompt: string,
+): number | null {
+  const outputStr = JSON.stringify(output);
+  const outputCitations = [...outputStr.matchAll(/\[EVIDENCE-\d+\]/g)].map((m) => m[0]);
+  if (outputCitations.length === 0) return null;
+
+  const validLabels = new Set(
+    [...userPrompt.matchAll(/EVIDENCE-\d+/g)].map((m) => m[0]),
   );
+
+  const validCount = outputCitations.filter((c) =>
+    validLabels.has(c.replace(/[[\]]/g, "")),
+  ).length;
+
+  return validCount / outputCitations.length;
 }

@@ -1,14 +1,5 @@
 "use server";
 
-/**
- * Cascade Update Server Actions
- *
- * User-facing actions for the /updates UI:
- * - Trigger cascade analysis on demand
- * - Accept/reject proposals
- * - Query cascade state
- */
-
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/session";
 import { revalidatePath } from "next/cache";
@@ -16,30 +7,15 @@ import { Phase } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 
 import { createEvidenceSnapshot } from "@/lib/cascade/snapshot";
-import { runImpactAnalysis, markDownstreamDirty } from "@/lib/cascade/impact";
+import { runImpactAnalysis, runSelectiveImpactAnalysis, markDownstreamDirty } from "@/lib/cascade/impact";
 import { executeRecomputeJob } from "@/lib/cascade/recompute";
 import { PHASE_GRAPH, getPhaseNode } from "@/lib/cascade/phases";
 import { getVerificationSummary } from "@/lib/assumptions/engine";
+import { logAudit } from "@/lib/audit";
 
-// ---------------------------------------------------------------------------
-// Trigger cascade update (Manual)
-// ---------------------------------------------------------------------------
-
-/**
- * Manually trigger a cascade update for a project.
- * Creates a new EvidenceSnapshot, runs impact analysis, then executes recompute.
- */
 export async function triggerCascadeUpdate(
   projectId: string,
   options?: {
-    /**
-     * If true, the cascade will pause at each phase that has unverified
-     * High-confidence assumptions. The human must verify/correct them
-     * before the cascade continues to downstream phases.
-     *
-     * If false (default), all phases run eagerly and assumptions are
-     * surfaced for review afterward.
-     */
     gatedMode?: boolean;
   }
 ) {
@@ -50,7 +26,6 @@ export async function triggerCascadeUpdate(
   });
   if (!project) return { error: "Project not found" };
 
-  // Check if project has any evidence
   const chunkCount = await prisma.documentChunk.count({
     where: { projectId },
   });
@@ -59,51 +34,82 @@ export async function triggerCascadeUpdate(
   }
 
   try {
-    // 1. Create evidence snapshot
     const snapshot = await createEvidenceSnapshot(projectId);
 
-    // 2. Run impact analysis (marks artifacts DIRTY, creates job + tasks)
     const impact = await runImpactAnalysis(
       projectId,
       snapshot.snapshotId,
       "MANUAL"
     );
 
-    // 3. Execute the recompute job (runs agents, creates proposals, extracts assumptions)
-    // Auto-accept proposals so each phase becomes CLEAN and the cascade propagates fully.
-    const result = await executeRecomputeJob(impact.jobId, {
-      gatedMode: options?.gatedMode,
-      autoAccept: true,
-    });
+    const gatedMode = options?.gatedMode ?? false;
 
-    // 4. Get assumption verification summary
-    const assumptionSummary = await getVerificationSummary(projectId);
+    logAudit({
+      userId: session.userId,
+      action: "CASCADE_TRIGGER",
+      targetId: projectId,
+      targetType: "Project",
+      metadata: { snapshotId: snapshot.snapshotId, jobId: impact.jobId, gatedMode },
+    }).catch(() => {});
 
-    // 5. Sync Jira description (non-blocking)
-    syncProjectToJira(projectId, session.userId);
+    // XP: award points for running a cascade
+    import("@/lib/gamification/xp-engine").then(({ awardXp, XP_ACTIONS }) => {
+      awardXp(session.userId, XP_ACTIONS.CASCADE_RUN.action, XP_ACTIONS.CASCADE_RUN.points, projectId).catch(() => {});
+    }).catch(() => {});
 
-    revalidatePath(`/projects/${projectId}/updates`);
-    revalidatePath(`/projects/${projectId}/assumptions`);
-    revalidatePath(`/projects/${projectId}`);
+    void (async () => {
+      try {
+        await executeRecomputeJob(impact.jobId, {
+          gatedMode,
+          autoAccept: true,
+        });
+
+        syncProjectToJira(projectId, session.userId, "Cascade update completed — all phases recomputed");
+
+        revalidatePath(`/projects/${projectId}/updates`);
+        revalidatePath(`/projects/${projectId}/assumptions`);
+        revalidatePath(`/projects/${projectId}`);
+      } catch (err) {
+        console.error("[cascade] Async recompute failed:", err);
+        await prisma.recomputeJob.update({
+          where: { id: impact.jobId },
+          data: {
+            status: "COMPLETED_WITH_ERRORS",
+            finishedAt: new Date(),
+          },
+        }).catch(() => {});
+      }
+    })();
+
+    const assumptionSummary = gatedMode
+      ? await getVerificationSummary(projectId)
+      : null;
 
     return {
       success: true,
       snapshotId: snapshot.snapshotId,
       jobId: impact.jobId,
       impactedPhases: impact.impactedPhases,
-      completedTasks: result.completedTasks,
-      proposalCount: result.proposals.length,
-      errors: result.errors,
-      skipped: result.skipped,
-      assumptionSummary: {
-        total: assumptionSummary.totalAssumptions,
-        pending: assumptionSummary.pending,
-        verified: assumptionSummary.verified,
-        corrected: assumptionSummary.corrected,
-        rejected: assumptionSummary.rejected,
-        criticalPendingCount: assumptionSummary.criticalPending.length,
-      },
-      pausedAtPhase: result.pausedAtPhase,
+      async: true,
+      ...(gatedMode && assumptionSummary
+        ? {
+            gatedVerification: {
+              total: assumptionSummary.totalAssumptions,
+              pending: assumptionSummary.pending,
+              verified: assumptionSummary.verified,
+              corrected: assumptionSummary.corrected,
+              rejected: assumptionSummary.rejected,
+              criticalPendingCount: assumptionSummary.criticalPending.length,
+              criticalPending: assumptionSummary.criticalPending.map((a) => ({
+                id: a.id,
+                category: a.category,
+                claim: a.claim,
+                impact: a.impact,
+                blocksPhases: a.blocksPhases,
+              })),
+            },
+          }
+        : {}),
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Cascade update failed";
@@ -111,9 +117,69 @@ export async function triggerCascadeUpdate(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Apply Proposal (shared helper — no auth, used by both accept + auto-accept)
-// ---------------------------------------------------------------------------
+export async function triggerSelectiveRecompute(
+  projectId: string,
+  fromPhase: Phase
+) {
+  const session = await requireAuth();
+
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, ownerUserId: session.userId },
+  });
+  if (!project) return { error: "Project not found" };
+
+  const chunkCount = await prisma.documentChunk.count({
+    where: { projectId },
+  });
+  if (chunkCount === 0) {
+    return { error: "No evidence ingested yet. Ingest data first." };
+  }
+
+  try {
+    const snapshot = await createEvidenceSnapshot(projectId);
+
+    const impact = await runSelectiveImpactAnalysis(
+      projectId,
+      snapshot.snapshotId,
+      "MANUAL",
+      fromPhase
+    );
+
+    void (async () => {
+      try {
+        await executeRecomputeJob(impact.jobId, {
+          autoAccept: true,
+        });
+
+        syncProjectToJira(projectId, session.userId, `Selective recompute completed from ${fromPhase}`);
+
+        revalidatePath(`/projects/${projectId}/updates`);
+        revalidatePath(`/projects/${projectId}/assumptions`);
+        revalidatePath(`/projects/${projectId}`);
+      } catch (err) {
+        console.error("[cascade] Async selective recompute failed:", err);
+        await prisma.recomputeJob.update({
+          where: { id: impact.jobId },
+          data: {
+            status: "COMPLETED_WITH_ERRORS",
+            finishedAt: new Date(),
+          },
+        }).catch(() => {});
+      }
+    })();
+
+    return {
+      success: true,
+      jobId: impact.jobId,
+      snapshotId: snapshot.snapshotId,
+      impactedPhases: impact.impactedPhases,
+      async: true,
+    };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Selective recompute failed";
+    return { error: msg };
+  }
+}
 
 export async function applyProposal(
   proposalId: string,
@@ -172,10 +238,6 @@ export async function applyProposal(
   return { newVersion: nextVersion };
 }
 
-// ---------------------------------------------------------------------------
-// Accept Proposal (user-facing server action)
-// ---------------------------------------------------------------------------
-
 export async function acceptProposal(proposalId: string) {
   const session = await requireAuth();
 
@@ -195,7 +257,19 @@ export async function acceptProposal(proposalId: string) {
   try {
     const { newVersion } = await applyProposal(proposalId);
 
-    syncProjectToJira(proposal.projectId, session.userId);
+    logAudit({
+      userId: session.userId,
+      action: "PROPOSAL_ACCEPT",
+      targetId: proposalId,
+      targetType: "Proposal",
+      metadata: { phase: proposal.phase, projectId: proposal.projectId, newVersion },
+    }).catch(() => {});
+
+    syncProjectToJira(
+      proposal.projectId,
+      session.userId,
+      `Proposal accepted for ${proposal.phase} — now at v${newVersion}`,
+    );
 
     revalidatePath(`/projects/${proposal.projectId}/updates`);
     revalidatePath(`/projects/${proposal.projectId}`);
@@ -209,17 +283,6 @@ export async function acceptProposal(proposalId: string) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Reject Proposal
-// ---------------------------------------------------------------------------
-
-/**
- * Reject a proposal:
- * 1. Mark proposal as REJECTED
- * 2. Set artifact status to CLEAN_WITH_EXCEPTIONS
- * 3. Add the snapshotId to the artifact's ignoredSnapshotIds
- *    (prevents re-prompting for the same snapshot)
- */
 export async function rejectProposal(proposalId: string) {
   const session = await requireAuth();
 
@@ -237,13 +300,19 @@ export async function rejectProposal(proposalId: string) {
   }
 
   try {
-    // Update proposal
     await prisma.proposal.update({
       where: { id: proposalId },
       data: { status: "REJECTED", resolvedAt: new Date() },
     });
 
-    // Update artifact: CLEAN_WITH_EXCEPTIONS + add ignored snapshot
+    logAudit({
+      userId: session.userId,
+      action: "PROPOSAL_REJECT",
+      targetId: proposalId,
+      targetType: "Proposal",
+      metadata: { phase: proposal.phase, projectId: proposal.projectId },
+    }).catch(() => {});
+
     const artifact = await prisma.phaseArtifact.findFirst({
       where: { projectId: proposal.projectId, phase: proposal.phase },
       orderBy: { version: "desc" },
@@ -262,8 +331,11 @@ export async function rejectProposal(proposalId: string) {
       });
     }
 
-    // Sync Jira description (non-blocking)
-    syncProjectToJira(proposal.projectId, session.userId);
+    syncProjectToJira(
+      proposal.projectId,
+      session.userId,
+      `Proposal rejected for ${proposal.phase}`,
+    );
 
     revalidatePath(`/projects/${proposal.projectId}/updates`);
 
@@ -274,23 +346,15 @@ export async function rejectProposal(proposalId: string) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Query actions
-// ---------------------------------------------------------------------------
-
-/**
- * Get the full cascade state for a project's /updates page.
- */
 export async function getCascadeState(projectId: string) {
   const session = await requireAuth();
 
-  // Verify project ownership
   const project = await prisma.project.findFirst({
     where: { id: projectId, ownerUserId: session.userId },
-    select: { id: true },
+    select: { id: true, serviceTemplateContent: true },
   });
   if (!project) {
-    return { snapshots: [], phaseGraph: [], proposals: [], pendingCount: 0, jobs: [] };
+    return { snapshots: [], phaseGraph: [], proposals: [], pendingCount: 0, jobs: [], hasServiceTemplate: false };
   }
 
   const [
@@ -326,7 +390,6 @@ export async function getCascadeState(projectId: string) {
     }),
   ]);
 
-  // Build per-phase status map
   const phaseStatus = new Map<Phase, {
     latestVersion: number;
     status: string;
@@ -347,7 +410,6 @@ export async function getCascadeState(projectId: string) {
     }
   }
 
-  // Build assumption counts per phase
   const phaseAssumptionCounts = new Map<string, { total: number; pending: number; verified: number; corrected: number; rejected: number }>();
   for (const a of assumptions) {
     const existing = phaseAssumptionCounts.get(a.phase) ?? { total: 0, pending: 0, verified: 0, corrected: 0, rejected: 0 };
@@ -359,7 +421,6 @@ export async function getCascadeState(projectId: string) {
     phaseAssumptionCounts.set(a.phase, existing);
   }
 
-  // Build phase graph view
   const phaseGraph = PHASE_GRAPH.map((node) => {
     const state = phaseStatus.get(node.phase);
     const assumptionCounts = phaseAssumptionCounts.get(node.phase);
@@ -376,15 +437,12 @@ export async function getCascadeState(projectId: string) {
       snapshotId: state?.snapshotId ?? null,
       lastComputedAt: state?.lastComputedAt?.toISOString() ?? null,
       hasArtifact: state?.hasArtifact ?? false,
-      // Assumption verification status for this phase
       assumptions: assumptionCounts ?? { total: 0, pending: 0, verified: 0, corrected: 0, rejected: 0 },
     };
   });
 
-  // Pending proposals
   const pendingProposals = proposals.filter((p) => p.status === "PENDING");
 
-  // Assumption verification summary
   const totalPending = assumptions.filter((a) => a.status === "PENDING").length;
   const totalCriticalPending = assumptions.filter(
     (a) => a.status === "PENDING" && a.confidence === "High"
@@ -422,30 +480,30 @@ export async function getCascadeState(projectId: string) {
       completedTasks: j.tasks.filter((t) => t.status === "COMPLETED").length,
       failedTasks: j.tasks.filter((t) => t.status === "FAILED").length,
     })),
-    // Assumption verification health
     assumptionHealth: {
       totalAssumptions: assumptions.length,
       pendingVerification: totalPending,
       criticalPending: totalCriticalPending,
       allClear: totalCriticalPending === 0,
     },
+    hasServiceTemplate: !!project.serviceTemplateContent,
   };
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Sync the cascade PhaseArtifact acceptance into the legacy DiscoveryArtifact
- * table for backward compatibility with the existing brief viewer.
- */
+/** @deprecated Use phase artifact system directly. Toggle with LEGACY_DISCOVERY_SYNC env var. */
 async function syncDiscoveryArtifact(
   projectId: string,
   proposedJson: Record<string, unknown>,
   markdown: string | null,
   aiRunIds: unknown
 ) {
+  if (process.env.LEGACY_DISCOVERY_SYNC === "false") {
+    console.warn("[cascade] syncDiscoveryArtifact is deprecated and disabled via LEGACY_DISCOVERY_SYNC=false");
+    return;
+  }
+
+  console.warn("[cascade] syncDiscoveryArtifact is deprecated. Set LEGACY_DISCOVERY_SYNC=false to disable.");
+
   const latest = await prisma.discoveryArtifact.findFirst({
     where: { projectId },
     orderBy: { version: "desc" },
@@ -491,21 +549,16 @@ async function syncDiscoveryArtifact(
   });
 }
 
-/**
- * Fire-and-forget Jira sync. Imported dynamically to avoid circular deps
- * and to keep the critical path fast.
- */
-function syncProjectToJira(projectId: string, userId: string) {
+function syncProjectToJira(projectId: string, userId: string, event?: string) {
   import("@/lib/jira/client")
-    .then(({ syncJiraDescription }) => syncJiraDescription(projectId, userId))
+    .then(({ syncJiraDescription }) =>
+      syncJiraDescription(projectId, userId, event),
+    )
     .catch((err) =>
       console.warn("[cascade] Jira sync failed (non-blocking):", err),
     );
 }
 
-/**
- * Get a single proposal with its full patch detail.
- */
 export async function getProposalDetail(proposalId: string) {
   const session = await requireAuth();
 
@@ -515,14 +568,12 @@ export async function getProposalDetail(proposalId: string) {
 
   if (!proposal) return null;
 
-  // Verify the user owns the project this proposal belongs to
   const project = await prisma.project.findFirst({
     where: { id: proposal.projectId, ownerUserId: session.userId },
     select: { id: true },
   });
   if (!project) return null;
 
-  // Get the base artifact to show "before" state
   const baseArtifact = await prisma.phaseArtifact.findFirst({
     where: {
       projectId: proposal.projectId,

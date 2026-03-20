@@ -3,6 +3,7 @@ generator client {
   previewFeatures = ["postgresqlExtensions"]
 }
 
+// Production: use PgBouncer URL with ?pgbouncer=true
 datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
@@ -23,8 +24,9 @@ enum Phase {
   CRAFT_SOLUTION
   TEST_SOLUTION
   DEPLOYMENT_PLAN
-  MONITORING
-  ITERATION
+  MEETINGS
+  WORKING_SESSIONS
+  BUILD_LOG
 }
 
 enum ArtifactStatus {
@@ -72,11 +74,18 @@ enum TopologyEdgeType {
 // Auth & Users
 // ---------------------------------------------------------------------------
 
+enum UserRole {
+  ADMIN
+  ADMIRAL
+  CSE
+}
+
 model User {
   id                  String               @id @default(cuid())
   email               String               @unique
   name                String
   passwordHash        String
+  role                UserRole             @default(CSE)
   isAdmin             Boolean              @default(false)
   googleRefreshToken  String?
   googleEmail         String?
@@ -85,11 +94,79 @@ model User {
   jiraApiToken        String?
   jiraDefaultProject  String?
   jiraIssueType       String?             @default("Task")
+  // Gamification
+  xp                  Int                  @default(0)
+  xpLevel             Int                  @default(1)
+  xpStreak            Int                  @default(0)
+  lastXpEventAt       DateTime?
+
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @default(now()) @updatedAt
   projects            Project[]
   ingestRuns          IngestRun[]
   ingestSourceConfigs IngestSourceConfig[]
+  admiralNotes        AdmiralNote[]      @relation("noteAuthor")
+  cseNotes            AdmiralNote[]      @relation("noteCse")
+  authoredTasks       AdmiralTask[]      @relation("taskAuthor")
+  assignedTasks       AdmiralTask[]      @relation("taskAssignee")
+  xpEvents            XpEvent[]
+}
+
+model XpEvent {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  action      String
+  points      Int
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model AdmiralNote {
+  id          String   @id @default(cuid())
+  authorId    String
+  author      User     @relation("noteAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  cseUserId   String?
+  cseUser     User?    @relation("noteCse", fields: [cseUserId], references: [id])
+  phase       String?
+  scope       String   @default("project")
+  content     String
+  pinned      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([authorId])
+  @@index([cseUserId])
+}
+
+model AdmiralTask {
+  id          String    @id @default(cuid())
+  authorId    String
+  author      User      @relation("taskAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  assigneeId  String
+  assignee    User      @relation("taskAssignee", fields: [assigneeId], references: [id], onDelete: Cascade)
+  projectId   String?
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  priority    String    @default("medium")
+  status      String    @default("pending")
+  dueDate     DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([assigneeId])
+  @@index([authorId])
+  @@index([projectId])
 }
 
 // ---------------------------------------------------------------------------
@@ -102,8 +179,15 @@ model Project {
   primaryDomain        String?
   apiDomain            String?
   publicWorkspaceUrl   String?
-  ownerUserId          String
-  owner                User                @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  customerContactName  String?
+  customerContactEmail String?
+  status               String              @default("active")
+  engagementStage      Int                 @default(0) // 0=Allocated, 1=Requested, 2=Approved, 3=Engaged, 4=Pitched, 5=POV, 6=Delivered, 7=Closed/Won
+  completedAt          DateTime?
+  closedWonAt          DateTime?
+  clonedFromId         String?
+  ownerUserId          String?
+  owner                User?               @relation(fields: [ownerUserId], references: [id], onDelete: SetNull)
   createdAt            DateTime            @default(now())
   updatedAt            DateTime            @updatedAt
   discoveryArtifacts   DiscoveryArtifact[]
@@ -133,6 +217,17 @@ model Project {
   postmanApiKey        String?             // Encrypted Postman API key
   postmanWorkspaceId   String?             // Postman workspace ID for syncing
 
+  // Service template (customer's OpenAPI spec, Postman collection, etc.)
+  serviceTemplateContent  String?          // Raw template content (YAML/JSON)
+  serviceTemplateType     String?          // openapi, postman-collection, docker-compose, custom
+  serviceTemplateFileName String?          // Original file name for display
+  serviceTemplateNotes    String?          // CSE notes about the template
+
+  // Repo delivery tracking
+  lastRepoPushAt       DateTime?           // Last time artifacts were pushed to repo
+  lastRepoPrUrl        String?             // URL of most recent delivery PR
+  lastRepoPrNumber     Int?                // PR number for status polling
+
   // Feature #5: Git integration
   gitProvider          String?             // github, gitlab, bitbucket
   gitRepoOwner         String?
@@ -140,8 +235,21 @@ model Project {
   gitToken             String?             // Encrypted PAT/OAuth token
   gitBaseBranch        String?             @default("main")
 
+  // POC Deliverables tracking
+  pocDeliverablesJson  Json?               // [{id, title, description, completed, completedAt, evidenceUrl?, notes?}]
+
+  // Shareable architecture form
+  architectShareToken  String?   @unique   // UUID token for public architecture form link
+  architectShareData   Json?               // Partial form data saved by CSE for pre-population
+
   // Feature #13: Governance
   governanceRulesJson  Json?               // Governance rules config
+
+  // Point 35: Webhook-based evidence ingestion
+  webhookSecret        String?             // Encrypted per-project webhook secret
+
+  // Point 37: Slack integration
+  slackWebhookUrl      String?             // Slack incoming webhook URL for alerts
 
   // Feature #14: Multi-workspace / multi-team
   workspaces           ProjectWorkspace[]
@@ -159,10 +267,11 @@ model Project {
   blockers             Blocker[]
 
   // Wide Adoption Accelerator
-  adoptionWaves        AdoptionWave[]
-  adoptionTeams        AdoptionTeam[]
-  dripCampaigns        DripCampaign[]
-  adoptionMilestones   AdoptionMilestone[]
+  admiralNotes         AdmiralNote[]
+  admiralTasks         AdmiralTask[]
+
+  // Gamification
+  xpEvents             XpEvent[]
 }
 
 // ---------------------------------------------------------------------------
@@ -229,17 +338,20 @@ model SourceDocument {
   id           String          @id @default(cuid())
   projectId    String
   project      Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  sourceType   String          // KEPLER, DNS, HEADERS, GITHUB, MANUAL, SLACK, GMAIL, etc.
-  externalId   String?         // External source dedup key (e.g. email ID, file hash)
-  contentHash  String?         // SHA-256 of rawText for idempotent ingestion
-  title        String?
-  rawText      String
-  metadataJson Json?
-  createdAt    DateTime        @default(now())
-  chunks       DocumentChunk[]
+  sourceType      String          // KEPLER, DNS, HEADERS, GITHUB, MANUAL, SLACK, GMAIL, OPENAPI, etc.
+  externalId      String?         // External source dedup key (e.g. email ID, file hash)
+  contentHash     String?         // SHA-256 of rawText for idempotent ingestion
+  title           String?
+  rawText         String
+  metadataJson    Json?
+  lastVerifiedAt  DateTime?       // Point 41: when this doc was last re-verified
+  freshnessScore  Int?            // Point 41: 0-100 freshness score
+  createdAt       DateTime        @default(now())
+  chunks          DocumentChunk[]
 
   @@unique([projectId, contentHash])
   @@index([projectId, externalId])
+  @@index([projectId, sourceType])
 }
 
 model DocumentChunk {
@@ -254,6 +366,7 @@ model DocumentChunk {
   createdAt     DateTime                    @default(now())
 
   @@index([projectId])
+  @@index([projectId, evidenceLabel])
 }
 
 model AIRun {
@@ -268,12 +381,16 @@ model AIRun {
   outputJson Json?
   tokenUsage Json?
   durationMs Int?
+  messagesJson    Json?    // Point 4: multi-turn message history
+  citationAccuracy Float?  // Point 5: ratio of valid citations to total
+  zodParseAttempts Int?    // Point 2: how many parse strategies were tried
   status     String   // RUNNING, SUCCESS, FAILED
   createdAt  DateTime @default(now())
 
   @@index([projectId])
   @@index([agentType])
   @@index([createdAt])
+  @@index([projectId, agentType])
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +484,7 @@ model PhaseArtifact {
 
   @@unique([projectId, phase, version])
   @@index([projectId, phase])
+  @@index([projectId, phase, status])
 }
 
 model RecomputeJob {
@@ -394,6 +512,8 @@ model RecomputeTask {
   message       String?      // Status message / error
   startedAt     DateTime?
   finishedAt    DateTime?
+
+  @@index([jobId, status])
 }
 
 model Proposal {
@@ -413,6 +533,7 @@ model Proposal {
   resolvedAt          DateTime?
 
   @@index([projectId, phase])
+  @@index([projectId, status])
 }
 
 // ---------------------------------------------------------------------------
@@ -765,191 +886,129 @@ model BlockerNuke {
 }
 
 // ---------------------------------------------------------------------------
-// Wide Adoption Accelerator
+// Upgrade Plan v2: New Models
 // ---------------------------------------------------------------------------
 
-enum WaveStatus {
-  PLANNED
-  READY
-  IN_PROGRESS
-  PAUSED
-  COMPLETED
-  SKIPPED
+// Point 2: Dynamic model routing quality scores
+model ModelQualityScore {
+  id                String   @id @default(cuid())
+  agentType         String
+  modelId           String
+  avgLatencyMs      Float    @default(0)
+  avgTokenCost      Float    @default(0)
+  successRate       Float    @default(1)
+  avgZodParseAttempts Float  @default(1)
+  sampleCount       Int      @default(0)
+  lastUpdated       DateTime @default(now())
+
+  @@unique([agentType, modelId])
+  @@index([agentType])
 }
 
-/// An adoption wave — a cohort of teams that adopt Postman together.
-/// Waves build like a tide: each wave is bigger and faster than the last.
-model AdoptionWave {
-  id              String      @id @default(cuid())
-  projectId       String
-  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+// Point 3: Agent evaluation results
+model AgentEvalResult {
+  id          String   @id @default(cuid())
+  agentType   String
+  modelId     String
+  testCaseId  String
+  passed      Boolean
+  assertions  Json?
+  inputJson   Json?
+  outputJson  Json?
+  durationMs  Int?
+  errorMsg    String?
+  createdAt   DateTime @default(now())
 
-  waveNumber      Int         // 1, 2, 3... — sequential wave order
-  name            String      // "Pilot Wave", "API Platform Team", "All Backend Teams"
-  description     String?
-  status          WaveStatus  @default(PLANNED)
-
-  // Timing
-  plannedStartDate DateTime?
-  plannedEndDate   DateTime?
-  actualStartDate  DateTime?
-  actualEndDate    DateTime?
-
-  // Go/No-Go gate
-  goNoGoGateJson  Json?       // Criteria that must be met before wave launches
-  gateCleared     Boolean     @default(false)
-  gateClearedAt   DateTime?
-  gateClearedBy   String?     // userId
-
-  // Metrics targets
-  targetTeamCount   Int       @default(0)
-  targetUserCount   Int       @default(0)
-  targetCollections Int       @default(0)
-  targetCiPipelines Int       @default(0)
-
-  // Actual metrics
-  actualTeamCount   Int       @default(0)
-  actualUserCount   Int       @default(0)
-  actualCollections Int       @default(0)
-  actualCiPipelines Int       @default(0)
-
-  // Relations
-  teams           AdoptionTeam[]
-  dripCampaigns   DripCampaign[]
-
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-
-  @@unique([projectId, waveNumber])
-  @@index([projectId])
+  @@index([agentType])
+  @@index([createdAt])
 }
 
-/// A team within the enterprise being onboarded to Postman.
-model AdoptionTeam {
-  id              String      @id @default(cuid())
-  projectId       String
-  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  waveId          String?
-  wave            AdoptionWave? @relation(fields: [waveId], references: [id], onDelete: SetNull)
-
-  name            String      // "Payments API Team", "Infrastructure", "QA"
-  department      String?     // Engineering, QA, DevOps, Platform, etc.
-  teamSize        Int         @default(0)
-  teamLead        String?     // Contact name
-  teamLeadEmail   String?
-
-  // Readiness
-  readinessScore  Int         @default(0) // 0-100
-  readinessJson   Json?       // Detailed readiness assessment
-
-  // Adoption status
-  adoptionStage   String      @default("unaware") // unaware, aware, evaluating, piloting, adopted, champion
-  adoptionScore   Int         @default(0) // 0-100 composite
-
-  // Tech context
-  ciPlatform      String?     // github_actions, jenkins, etc.
-  primaryLanguage String?     // Java, Python, Node, etc.
-  existingTools   Json?       // Competing tools they currently use
-  integrationComplexity String? // low, medium, high
-
-  // Champion
-  championName    String?
-  championEmail   String?
-  championActive  Boolean     @default(false)
-
-  // Metrics
-  collectionsCreated   Int    @default(0)
-  testsWritten         Int    @default(0)
-  ciPipelinesActive    Int    @default(0)
-  activeUsers          Int    @default(0)
-  newmanRunsPerWeek    Int    @default(0)
-
-  // ROI
-  estimatedRoiJson     Json?  // Projected ROI for this team
-  actualRoiJson        Json?  // Measured ROI
-
-  // Resistance / friction
-  resistanceLevel      String @default("none") // none, low, medium, high
-  resistanceNotes      String?
-  frictionPoints       Json?  // Array of friction points
-
-  // Onboarding
-  onboardingPlaybookJson Json? // Generated onboarding playbook
-  integrationBlueprintJson Json? // Generated CI/CD integration blueprint
-
-  // Notes
-  notes           String?
-
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-
-  @@index([projectId])
-  @@index([waveId])
-  @@index([adoptionStage])
+// Point 13: Audit log for sensitive operations
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  PROJECT_CREATE
+  PROJECT_DELETE
+  PROPOSAL_ACCEPT
+  PROPOSAL_REJECT
+  SECRET_ACCESS
+  ROLE_CHANGE
+  EXPORT
+  SEED
+  BLOCKER_ESCALATE
+  ASSUMPTION_VERIFY
+  CASCADE_TRIGGER
+  REPO_PUSH
+  SETTINGS_CHANGE
 }
 
-/// A drip campaign — automated sequence of enablement content.
-model DripCampaign {
-  id              String      @id @default(cuid())
-  projectId       String
-  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  waveId          String?
-  wave            AdoptionWave? @relation(fields: [waveId], references: [id], onDelete: SetNull)
+model AuditLog {
+  id           String      @id @default(cuid())
+  userId       String
+  action       AuditAction
+  targetId     String?
+  targetType   String?
+  metadataJson Json?
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime    @default(now())
 
-  name            String      // "Backend Team Onboarding Drip"
-  description     String?
-  targetAudience  String?     // team type, role, stage
-  status          String      @default("draft") // draft, active, paused, completed
-
-  // Schedule
-  startDate       DateTime?
-  cadence         String      @default("weekly") // daily, twice_weekly, weekly, biweekly
-  totalSteps      Int         @default(0)
-  currentStep     Int         @default(0)
-
-  // Content
-  stepsJson       Json?       // Array of drip steps with content, timing, channels
-
-  // Nudge triggers
-  nudgeTriggersJson Json?     // Event-based triggers for contextual nudges
-
-  // Metrics
-  recipientCount  Int         @default(0)
-  openRate        Float       @default(0)
-  engagementRate  Float       @default(0)
-  conversionCount Int         @default(0)
-
-  // AI
-  aiGenerated     Boolean     @default(false)
-  aiRunId         String?
-
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-
-  @@index([projectId])
-  @@index([waveId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@index([targetId])
 }
 
-/// Adoption milestones — celebrations and momentum markers.
-model AdoptionMilestone {
-  id              String      @id @default(cuid())
-  projectId       String
-  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+// Point 16: Secrets rotation tracking
+model SecretRotation {
+  id          String   @id @default(cuid())
+  projectId   String
+  secretType  String
+  lastRotatedAt DateTime @default(now())
+  expiresAt   DateTime?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
 
-  type            String      // first_collection, first_ci_run, full_coverage, team_onboarded, wave_complete, org_wide
-  title           String
-  description     String?
-  teamName        String?     // Which team achieved this (if team-specific)
+  @@unique([projectId, secretType])
+  @@index([expiresAt])
+}
 
-  // Celebration
-  celebratedAt    DateTime    @default(now())
-  celebrationJson Json?       // Celebration content: message, metrics snapshot, shareable card
+// Point 23: Notification center
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String?
+  linkUrl   String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
 
-  // Metrics at time of milestone
-  metricsSnapshot Json?
+  @@index([userId, read])
+  @@index([userId, createdAt])
+}
 
-  createdAt       DateTime    @default(now())
+// Point 49: Multi-tenant workspace isolation
+model Workspace {
+  id        String               @id @default(cuid())
+  name      String
+  slug      String               @unique
+  ownerId   String
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  members   WorkspaceMembership[]
 
-  @@index([projectId])
-  @@index([type])
+  @@index([ownerId])
+}
+
+model WorkspaceMembership {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  role        String    @default("member")
+  joinedAt    DateTime  @default(now())
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
 }

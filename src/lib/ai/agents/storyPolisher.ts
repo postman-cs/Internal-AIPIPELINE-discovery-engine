@@ -29,7 +29,7 @@ export type StoryPolisherOutput = z.infer<typeof storyPolisherOutputSchema>;
 // Agent
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are a senior Solutions Engineer at Postman preparing a customer topology walkthrough.
+const SYSTEM_PROMPT = `You are a senior Success Captain (CSE) at Postman preparing a customer topology walkthrough.
 
 Your task: Take the raw story outline and polish the speaker notes into a concise, professional narrative.
 

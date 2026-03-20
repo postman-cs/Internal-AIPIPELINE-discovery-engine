@@ -27,7 +27,7 @@ OUTPUT: Return a JSON object with this exact structure:
   "companySnapshot": {
     "industry": "string",
     "engineeringSize": "string (estimate)",
-    "publicApiPresence": "Yes" | "No" | "Partial",
+    "publicApiPresence": "Yes" | "No" | "Partial" | "Unknown",
     "summary": "2-3 sentence company overview",
     "evidenceIds": ["EVIDENCE-1", "EVIDENCE-3"]
   },

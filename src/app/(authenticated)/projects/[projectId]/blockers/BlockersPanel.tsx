@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useTransition, useCallback, useEffect } from "react";
+import { useState, useTransition, useCallback, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 import {
   designMissileAction,
   designNukeAction,
@@ -10,6 +11,9 @@ import {
   fireMissileAction,
 } from "@/lib/actions/blockers";
 import { useToast } from "@/components/Toast";
+import { LazyCanvas } from "@/components/LazyCanvas";
+
+const ImpactFieldView = dynamic(() => import("./ImpactFieldView"), { ssr: false });
 
 const DESIGN_TIMEOUT_MS = 150_000;
 
@@ -96,6 +100,8 @@ export function BlockersPanel({
   const [busyBlockers, setBusyBlockers] = useState<Record<string, string>>({});
   const [details, setDetails] = useState<Record<string, BlockerDetail>>({});
   const [loadingDetail, setLoadingDetail] = useState<string | null>(null);
+  const [nukeTargetId, setNukeTargetId] = useState<string | null>(null);
+  const pendingNeutralizeRef = useRef<string | null>(null);
   const toast = useToast();
 
   useEffect(() => {
@@ -185,13 +191,64 @@ export function BlockersPanel({
     });
   }
 
+  function handleShootNuke(nukeId: string, blockerId: string) {
+    pendingNeutralizeRef.current = blockerId;
+    setNukeTargetId(blockerId);
+    startTransition(async () => {
+      const r = await launchNukeAction(nukeId);
+      if ("error" in r && r.error) {
+        toast.error("Launch failed", r.error);
+        pendingNeutralizeRef.current = null;
+      } else {
+        toast.success("Nuke launched", "Impact imminent — stand by...");
+        setDetails((prev) => { const n = { ...prev }; delete n[blockerId]; return n; });
+      }
+    });
+  }
+
+  function handleShootFromBlocker(blockerId: string) {
+    const shootable = (n: NukeView) => n.status === "designed" || n.status === "armed";
+    const cached = details[blockerId];
+    if (cached) {
+      const nuke = cached.nukes.find(shootable);
+      if (nuke) { handleShootNuke(nuke.id, blockerId); return; }
+    }
+    markBusy(blockerId, "shooting");
+    getBlockerDetailAction(blockerId).then((r) => {
+      clearBusy(blockerId);
+      if (!("blocker" in r) || !r.blocker) { toast.error("Load failed", "Could not load nuke details"); return; }
+      const det = { missiles: r.blocker.missiles as MissileView[], nukes: r.blocker.nukes as NukeView[] };
+      setDetails((prev) => ({ ...prev, [blockerId]: det }));
+      const nuke = det.nukes.find(shootable);
+      if (nuke) handleShootNuke(nuke.id, blockerId);
+      else toast.error("No armed nuke", "Design a nuke first, then try again");
+    });
+  }
+
   function handleStatusChange(blockerId: string, status: string) {
+    if (status === "NEUTRALIZED") {
+      setNukeTargetId(blockerId);
+    }
     startTransition(async () => {
       const r = await updateBlockerStatusAction(blockerId, status);
       if ("error" in r && r.error) toast.error("Update failed", r.error);
       else toast.success("Status updated", `Blocker → ${status.replace(/_/g, " ")}`);
     });
   }
+
+  const handleNukeComplete = useCallback(() => {
+    setNukeTargetId(null);
+    const blockerId = pendingNeutralizeRef.current;
+    if (blockerId) {
+      pendingNeutralizeRef.current = null;
+      startTransition(async () => {
+        const r = await updateBlockerStatusAction(blockerId, "NEUTRALIZED");
+        if ("error" in r && r.error) toast.error("Status update failed", r.error);
+        else toast.success("Target neutralized", "Blocker has been eliminated");
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toast]);
 
   if (!dashboard) {
     return (
@@ -228,6 +285,29 @@ export function BlockersPanel({
             Map, target, and neutralize adoption blockers
           </p>
         </div>
+      </div>
+
+      {/* ═══ Impact Field Visualization ═══ */}
+      <div className="mb-8">
+        <LazyCanvas>
+          <ImpactFieldView
+            blockers={allBlockers.map((b) => ({
+              id: b.id,
+              title: b.title,
+              severity: b.severity,
+              status: b.status,
+              impactScore: b.impactScore,
+              domain: b.domain,
+              missileCount: b.missileCount,
+              nukeCount: b.nukeCount,
+              blockedPhases: Array.isArray(b.blockedPhases) ? b.blockedPhases : [],
+            }))}
+            overallRiskScore={dashboard.overallRiskScore}
+            nukeTargetId={nukeTargetId}
+            onNukeComplete={handleNukeComplete}
+            onShootNuke={handleShootFromBlocker}
+          />
+        </LazyCanvas>
       </div>
 
       {/* ═══ Dashboard Grid ═══ */}
@@ -465,7 +545,7 @@ export function BlockersPanel({
                           <p className="text-xs" style={{ color: "var(--foreground-muted)" }}>{b.rootCause}</p>
                         </InfoBlock>
                       )}
-                      {b.blockedPhases.length > 0 && (
+                      {Array.isArray(b.blockedPhases) && b.blockedPhases.length > 0 && (
                         <InfoBlock label="Blocked Phases" icon={<LockIcon />}>
                           <div className="flex gap-1 flex-wrap">
                             {b.blockedPhases.map((p) => (
@@ -476,7 +556,7 @@ export function BlockersPanel({
                           </div>
                         </InfoBlock>
                       )}
-                      {b.blockedCapabilities.length > 0 && (
+                      {Array.isArray(b.blockedCapabilities) && b.blockedCapabilities.length > 0 && (
                         <InfoBlock label="Blocked Capabilities" icon={<GridIcon />}>
                           <div className="flex gap-1 flex-wrap">
                             {b.blockedCapabilities.map((c) => (
@@ -734,9 +814,10 @@ function MissileCard({ missile: m, blockerId, onFire, isPending }: {
 // Nuke Card
 // ═══════════════════════════════════════════════════════════════════════════
 
-function NukeCard({ nuke: n, blockerId, onLaunch, isPending }: {
+function NukeCard({ nuke: n, isPending }: {
   nuke: NukeView; blockerId: string;
-  onLaunch: (nukeId: string, blockerId: string) => void; isPending: boolean;
+  onLaunch?: (nukeId: string, blockerId: string) => void;
+  isPending: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const statusColors: Record<string, string> = { designed: "#f97316", armed: "#ef4444", launched: "#dc2626", detonated: "#34d399", failed: "#6b7280" };
@@ -958,27 +1039,7 @@ function NukeCard({ nuke: n, blockerId, onLaunch, isPending }: {
             </div>
           )}
 
-          {/* Launch button */}
-          {(n.status === "designed" || n.status === "armed") && (
-            <button
-              className="w-full rounded-lg px-4 py-3 flex items-center justify-center gap-2 transition-all duration-300 group"
-              style={{
-                background: "linear-gradient(135deg, rgba(249,115,22,0.2), rgba(239,68,68,0.2))",
-                border: "1px solid rgba(249,115,22,0.4)",
-                color: "#f97316",
-                boxShadow: "0 0 20px rgba(249,115,22,0.1), inset 0 1px 0 rgba(255,255,255,0.05)",
-              }}
-              onClick={() => onLaunch(n.id, blockerId)}
-              disabled={isPending}
-            >
-              <svg className="w-5 h-5 group-hover:animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                <circle cx="12" cy="12" r="10" strokeDasharray="4 2" />
-                <circle cx="12" cy="12" r="4" fill="currentColor" opacity={0.3} />
-                <circle cx="12" cy="12" r="1.5" fill="currentColor" />
-              </svg>
-              <span className="text-sm font-bold tracking-wide">LAUNCH NUKE</span>
-            </button>
-          )}
+          {/* Nuke shooting is handled via the silo button in the animation UI */}
 
           {n.launchedAt && <p className="text-[10px]" style={{ color: "var(--foreground-dim)" }}>Launched: {new Date(n.launchedAt).toLocaleDateString()}</p>}
           {n.resultNotes && (

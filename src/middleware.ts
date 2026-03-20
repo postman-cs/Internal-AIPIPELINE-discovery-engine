@@ -9,31 +9,33 @@ import { SessionData, SESSION_COOKIE_NAME, getSessionSecret } from "@/lib/sessio
 const PUBLIC_EXACT_PATHS = new Set([
   "/",
   "/login",
+  "/about",
   "/api/cron/daily-ingest",
   "/api/health",
   "/api/webhooks/ingest",
   "/api/webhooks/newman-results",
+  "/api/webhooks/evidence",
+  "/api/webhooks/jira",
 ]);
 
 // ---------------------------------------------------------------------------
-// Rate limiting — simple in-memory sliding window
+// Rate limiting — hybrid Redis / in-memory sliding window
 // ---------------------------------------------------------------------------
 
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
-const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_WINDOW_MS = 60_000;
 let lastCleanup = Date.now();
-const CLEANUP_INTERVAL_MS = 300_000; // 5 minutes
+const CLEANUP_INTERVAL_MS = 300_000;
 const RATE_LIMITS: Record<string, number> = {
-  "/login": 10,                          // 10 attempts/min
-  "/api/ingest/run": 20,                // 20 requests/min
-  "/api/cron/daily-ingest": 5,          // 5 requests/min
-  "default": 120,                        // 120 requests/min for other routes
+  "/login": 10,
+  "/api/ingest/run": 20,
+  "/api/cron/daily-ingest": 5,
+  "default": 120,
 };
 
-function isRateLimited(key: string, limit: number): boolean {
+function inMemoryRateLimit(key: string, limit: number): boolean {
   const now = Date.now();
 
-  // Periodic cleanup of expired entries to prevent memory leak
   if (now - lastCleanup > CLEANUP_INTERVAL_MS) {
     lastCleanup = now;
     for (const [k, v] of rateLimitMap) {
@@ -50,6 +52,48 @@ function isRateLimited(key: string, limit: number): boolean {
   return entry.count > limit;
 }
 
+/**
+ * Redis-backed rate limiting via Upstash REST API (Edge-compatible).
+ * Requires REDIS_URL in the format: https://<host> and REDIS_TOKEN for auth.
+ * Uses a sliding-window counter with 60s TTL.
+ */
+async function redisRateLimit(key: string, limit: number): Promise<boolean> {
+  const redisUrl = process.env.REDIS_URL!;
+  const redisToken = process.env.REDIS_TOKEN ?? "";
+
+  const pipeline = [
+    ["INCR", key],
+    ["EXPIRE", key, "60"],
+  ];
+
+  const res = await fetch(`${redisUrl}/pipeline`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${redisToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(pipeline),
+    signal: AbortSignal.timeout(2000),
+  });
+
+  if (!res.ok) throw new Error(`Redis responded ${res.status}`);
+
+  const results = (await res.json()) as Array<{ result: number }>;
+  const count = results[0]?.result ?? 0;
+  return count > limit;
+}
+
+async function isRateLimited(key: string, limit: number): Promise<boolean> {
+  if (process.env.REDIS_URL) {
+    try {
+      return await redisRateLimit(key, limit);
+    } catch {
+      // Fall through to in-memory on Redis failure
+    }
+  }
+  return inMemoryRateLimit(key, limit);
+}
+
 function getClientIp(request: NextRequest): string {
   return (
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
@@ -59,25 +103,26 @@ function getClientIp(request: NextRequest): string {
 }
 
 // ---------------------------------------------------------------------------
-// Security headers applied to every response
+// Security headers applied to every response (Point 14: CSP nonce)
 // ---------------------------------------------------------------------------
 
-function addSecurityHeaders(response: NextResponse): NextResponse {
-  // Prevent clickjacking
+function addSecurityHeaders(response: NextResponse, nonce?: string): NextResponse {
   response.headers.set("X-Frame-Options", "DENY");
-  // Prevent MIME type sniffing
   response.headers.set("X-Content-Type-Options", "nosniff");
-  // Referrer policy
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  // Permissions policy — disable dangerous browser features
   response.headers.set(
     "Permissions-Policy",
     "camera=(), microphone=(), geolocation=(), payment=()"
   );
-  // Content Security Policy — tighter in production
-  const scriptSrc = process.env.NODE_ENV === "production"
-    ? "script-src 'self' 'unsafe-inline'" // Production: no unsafe-eval
-    : "script-src 'self' 'unsafe-inline' 'unsafe-eval'"; // Dev: Next.js HMR needs eval
+
+  let scriptSrc: string;
+  if (process.env.NODE_ENV === "production" && nonce) {
+    scriptSrc = `script-src 'self' 'nonce-${nonce}'`;
+    response.headers.set("x-csp-nonce", nonce);
+  } else {
+    scriptSrc = "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
+  }
+
   response.headers.set(
     "Content-Security-Policy",
     [
@@ -92,7 +137,7 @@ function addSecurityHeaders(response: NextResponse): NextResponse {
       "form-action 'self'",
     ].join("; ")
   );
-  // HSTS — only in production
+
   if (process.env.NODE_ENV === "production") {
     response.headers.set(
       "Strict-Transport-Security",
@@ -110,21 +155,36 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const ip = getClientIp(request);
 
+  const nonce = crypto.randomUUID().replace(/-/g, "");
+
   // ---- Rate limiting ----
   const rateKey = `${ip}:${pathname}`;
   const limit = RATE_LIMITS[pathname] ?? RATE_LIMITS["default"];
-  if (isRateLimited(rateKey, limit)) {
+  if (await isRateLimited(rateKey, limit)) {
     return addSecurityHeaders(
       NextResponse.json(
         { error: "Too many requests. Please slow down." },
         { status: 429 }
-      )
+      ),
+      nonce
     );
   }
 
-  // ---- Public paths (exact match only, no prefix) ----
-  if (PUBLIC_EXACT_PATHS.has(pathname)) {
-    return addSecurityHeaders(NextResponse.next());
+  // ---- Public paths ----
+  const isPublicPrefix = pathname.startsWith("/architect/fill/");
+  if (PUBLIC_EXACT_PATHS.has(pathname) || isPublicPrefix) {
+    const res = NextResponse.next();
+    // CSRF: set token cookie on every response for double-submit pattern
+    if (!request.cookies.get("__csrf")) {
+      const csrfToken = crypto.randomUUID().replace(/-/g, "");
+      res.cookies.set("__csrf", csrfToken, {
+        httpOnly: false,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+      });
+    }
+    return addSecurityHeaders(res, nonce);
   }
 
   // ---- Static assets, etc. ----
@@ -137,33 +197,49 @@ export async function middleware(request: NextRequest) {
       const metricsToken = process.env.METRICS_TOKEN;
       if (!metricsToken || authHeader !== `Bearer ${metricsToken}`) {
         return addSecurityHeaders(
-          NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+          NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
+          nonce
         );
       }
     }
-    return addSecurityHeaders(NextResponse.next());
+    return addSecurityHeaders(NextResponse.next(), nonce);
   }
 
   // ---- Seed endpoint — block entirely outside local dev ----
   if (pathname === "/api/seed" || pathname.startsWith("/api/seed/")) {
     if (process.env.NODE_ENV === "production") {
       return addSecurityHeaders(
-        NextResponse.json({ error: "Not found" }, { status: 404 })
+        NextResponse.json({ error: "Not found" }, { status: 404 }),
+        nonce
       );
     }
-    return addSecurityHeaders(NextResponse.next());
+    return addSecurityHeaders(NextResponse.next(), nonce);
   }
 
   // ---- Session-authenticated routes ----
   const response = NextResponse.next();
 
+  // CSRF: set double-submit cookie if not present
+  if (!request.cookies.get("__csrf")) {
+    const csrfToken = crypto.randomUUID().replace(/-/g, "");
+    response.cookies.set("__csrf", csrfToken, {
+      httpOnly: false,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+    });
+    response.headers.set("X-CSRF-Token", csrfToken);
+  } else {
+    response.headers.set("X-CSRF-Token", request.cookies.get("__csrf")!.value);
+  }
+
   let sessionPassword: string;
   try {
     sessionPassword = getSessionSecret();
   } catch {
-    // If SECRET is missing, refuse to serve authenticated routes
     return addSecurityHeaders(
-      NextResponse.json({ error: "Server misconfigured" }, { status: 500 })
+      NextResponse.json({ error: "Server misconfigured" }, { status: 500 }),
+      nonce
     );
   }
 
@@ -173,18 +249,33 @@ export async function middleware(request: NextRequest) {
   });
 
   if (!session.userId) {
-    // API routes get 401, pages get redirected
     if (pathname.startsWith("/api/")) {
       return addSecurityHeaders(
-        NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+        NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
+        nonce
       );
     }
     return addSecurityHeaders(
-      NextResponse.redirect(new URL("/login", request.url))
+      NextResponse.redirect(new URL("/login", request.url)),
+      nonce
     );
   }
 
-  return addSecurityHeaders(response);
+  // ---- Admiral role enforcement (Point 12) ----
+  if (pathname.startsWith("/admiral") && session.role !== "ADMIRAL" && session.role !== "ADMIN") {
+    if (pathname.startsWith("/api/")) {
+      return addSecurityHeaders(
+        NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+        nonce
+      );
+    }
+    return addSecurityHeaders(
+      NextResponse.redirect(new URL("/dashboard", request.url)),
+      nonce
+    );
+  }
+
+  return addSecurityHeaders(response, nonce);
 }
 
 export const config = {

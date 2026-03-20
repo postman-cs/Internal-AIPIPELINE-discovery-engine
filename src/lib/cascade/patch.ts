@@ -35,20 +35,20 @@ export function generatePatch(
   // Both null/undefined
   if (base === proposed) return ops;
 
-  // Type mismatch or one is null
+  // undefined means key absent; null is a valid JSON value
   if (
-    base === null ||
     base === undefined ||
-    proposed === null ||
     proposed === undefined ||
+    base === null ||
+    proposed === null ||
     typeof base !== typeof proposed
   ) {
-    if (base === null || base === undefined) {
-      ops.push({ op: "add", path: path || "/", value: proposed });
-    } else if (proposed === null || proposed === undefined) {
-      ops.push({ op: "remove", path: path || "/", oldValue: base });
+    if (base === undefined) {
+      ops.push({ op: "add", path: path, value: proposed });
+    } else if (proposed === undefined) {
+      ops.push({ op: "remove", path: path, oldValue: base });
     } else {
-      ops.push({ op: "replace", path: path || "/", value: proposed, oldValue: base });
+      ops.push({ op: "replace", path: path, value: proposed, oldValue: base });
     }
     return ops;
   }
@@ -56,7 +56,7 @@ export function generatePatch(
   // Primitives (string, number, boolean)
   if (typeof base !== "object") {
     if (base !== proposed) {
-      ops.push({ op: "replace", path: path || "/", value: proposed, oldValue: base });
+      ops.push({ op: "replace", path: path, value: proposed, oldValue: base });
     }
     return ops;
   }
@@ -78,7 +78,7 @@ export function generatePatch(
 
     // Removed keys
     for (const key of Object.keys(baseObj)) {
-      if (!(key in propObj)) {
+      if (!Object.hasOwn(propObj, key)) {
         ops.push({
           op: "remove",
           path: `${path}/${escapeJsonPointer(key)}`,
@@ -90,7 +90,7 @@ export function generatePatch(
     // Added or changed keys
     for (const key of Object.keys(propObj)) {
       const childPath = `${path}/${escapeJsonPointer(key)}`;
-      if (!(key in baseObj)) {
+      if (!Object.hasOwn(baseObj, key)) {
         ops.push({
           op: "add",
           path: childPath,
@@ -106,21 +106,30 @@ export function generatePatch(
 
   // Fallback
   if (base !== proposed) {
-    ops.push({ op: "replace", path: path || "/", value: proposed, oldValue: base });
+    ops.push({ op: "replace", path: path, value: proposed, oldValue: base });
   }
 
   return ops;
 }
 
 /**
- * Diff two arrays. Uses index-based comparison.
- * For arrays of objects with identifying keys, a smarter match could be added later.
+ * Diff two arrays. Uses key-based matching when all items are objects with `id`
+ * fields, falling back to positional comparison otherwise. Key-based matching
+ * produces stable diffs when items are reordered or inserted in the middle.
  */
 function diffArrays(
   base: unknown[],
   proposed: unknown[],
   path: string
 ): PatchOp[] {
+  if (allHaveId(base) && allHaveId(proposed)) {
+    return diffArraysByKey(
+      base as Record<string, unknown>[],
+      proposed as Record<string, unknown>[],
+      path
+    );
+  }
+
   const ops: PatchOp[] = [];
   const maxLen = Math.max(base.length, proposed.length);
 
@@ -132,6 +141,55 @@ function diffArrays(
       ops.push({ op: "remove", path: itemPath, oldValue: base[i] });
     } else {
       ops.push(...generatePatch(base[i], proposed[i], itemPath));
+    }
+  }
+
+  return ops;
+}
+
+function allHaveId(arr: unknown[]): boolean {
+  return (
+    arr.length > 0 &&
+    arr.every(
+      (item) =>
+        item !== null &&
+        typeof item === "object" &&
+        "id" in (item as Record<string, unknown>)
+    )
+  );
+}
+
+function diffArraysByKey(
+  base: Record<string, unknown>[],
+  proposed: Record<string, unknown>[],
+  path: string
+): PatchOp[] {
+  const ops: PatchOp[] = [];
+
+  const baseById = new Map<string, { item: Record<string, unknown>; index: number }>();
+  for (let i = 0; i < base.length; i++) {
+    baseById.set(String(base[i].id), { item: base[i], index: i });
+  }
+
+  const proposedById = new Map<string, { item: Record<string, unknown>; index: number }>();
+  for (let i = 0; i < proposed.length; i++) {
+    proposedById.set(String(proposed[i].id), { item: proposed[i], index: i });
+  }
+
+  for (const [id, { item, index }] of baseById) {
+    if (!proposedById.has(id)) {
+      ops.push({ op: "remove", path: `${path}/${index}`, oldValue: item });
+    }
+  }
+
+  for (const [id, { item: propItem }] of proposedById) {
+    const baseEntry = baseById.get(id);
+    if (!baseEntry) {
+      ops.push({ op: "add", path: `${path}/-`, value: propItem });
+    } else {
+      ops.push(
+        ...generatePatch(baseEntry.item, propItem, `${path}/${baseEntry.index}`)
+      );
     }
   }
 
@@ -169,7 +227,7 @@ export function applyPatch(
 function applyOp(obj: unknown, op: PatchOp): unknown {
   const segments = parsePointer(op.path);
 
-  if (segments.length === 0 || (segments.length === 1 && segments[0] === "")) {
+  if (segments.length === 0) {
     // Root-level operation
     if (op.op === "replace" || op.op === "add") return op.value;
     if (op.op === "remove") return undefined;
@@ -209,7 +267,7 @@ function applyOp(obj: unknown, op: PatchOp): unknown {
 }
 
 function parsePointer(pointer: string): string[] {
-  if (!pointer || pointer === "/") return [""];
+  if (pointer === "" || pointer === undefined || pointer === null) return [];
   return pointer
     .split("/")
     .slice(1) // remove leading empty string from leading /
@@ -232,7 +290,7 @@ export function generateDiffSummary(ops: PatchOp[]): string {
 
   for (const op of ops) {
     const segments = parsePointer(op.path);
-    const topField = segments[0] || "(root)";
+    const topField = segments.length === 0 ? "(root)" : (segments[0] || "(empty key)");
     if (!byTopField.has(topField)) byTopField.set(topField, []);
     byTopField.get(topField)!.push(op);
   }

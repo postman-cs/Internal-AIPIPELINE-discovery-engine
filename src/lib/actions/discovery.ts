@@ -165,6 +165,33 @@ export async function saveDiscoveryArtifact(
     },
   });
 
+  // XP: award 10 points per newly filled discovery field
+  const DISCOVERY_FIELDS = [
+    "industry", "engineeringSize", "publicApiPresence",
+    "dnsFindings", "publicFootprint", "cloudGatewaySignals",
+    "developerFrictionSignals", "authForensics",
+    "maturityLevel", "maturityJustification",
+    "hypothesis", "recommendedApproach", "conversationAngle",
+  ];
+  const isFilled = (v: unknown) => v !== null && v !== undefined && v !== "" && v !== "[]";
+  const prevFieldCount = latest
+    ? DISCOVERY_FIELDS.filter((k) => isFilled((latest as Record<string, unknown>)[k])).length
+    : 0;
+  const newFieldCount = DISCOVERY_FIELDS.filter((k) => isFilled((data as Record<string, unknown>)[k])).length;
+  const prevTechCount = latest ? (JSON.parse((latest as Record<string, unknown>).technicalLandscapeJson as string || "[]") as unknown[]).length : 0;
+  const prevStakeholderCount = latest ? (JSON.parse((latest as Record<string, unknown>).stakeholderTargetsJson as string || "[]") as unknown[]).length : 0;
+  const entriesToAward =
+    Math.max(0, newFieldCount - prevFieldCount)
+    + Math.max(0, (data.technicalLandscape?.length ?? 0) - prevTechCount)
+    + Math.max(0, (data.stakeholderTargets?.length ?? 0) - prevStakeholderCount);
+
+  if (entriesToAward > 0) {
+    import("@/lib/gamification/xp-engine").then(({ awardXp, XP_ACTIONS }) => {
+      const pts = entriesToAward * XP_ACTIONS.DISCOVERY_ENTRY.points;
+      awardXp(session.userId, XP_ACTIONS.DISCOVERY_ENTRY.action, pts, projectId, { fields: entriesToAward }).catch(() => {});
+    }).catch(() => {});
+  }
+
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/discovery`);
   revalidatePath(`/projects/${projectId}/discovery/brief`);
@@ -326,8 +353,9 @@ export async function runAIDiscoveryPipeline(projectId: string) {
       validatedEvidenceIds: pipeline.validatedEvidenceIds.length,
     };
   } catch (error) {
-    console.error("[discovery] AI pipeline error:", error);
-    return { error: "AI discovery pipeline failed. Please try again." };
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[discovery] AI pipeline error:", msg, error);
+    return { error: `AI discovery pipeline failed: ${msg}` };
   }
 }
 
@@ -424,6 +452,36 @@ export async function getAllAIRuns(limit: number = 50) {
       project: { select: { id: true, name: true } },
     },
   });
+}
+
+/**
+ * Cursor-based paginated AI runs for the AI Runs page.
+ */
+export async function getPaginatedAIRuns(pageSize: number = 25, cursor?: string) {
+  const session = await requireAuth();
+  const safePage = Math.min(Math.max(pageSize, 10), 100);
+
+  const userProjects = await prisma.project.findMany({
+    where: { ownerUserId: session.userId },
+    select: { id: true },
+  });
+  const projectIds = userProjects.map((p) => p.id);
+
+  const runs = await prisma.aIRun.findMany({
+    where: { projectId: { in: projectIds } },
+    orderBy: { createdAt: "desc" },
+    take: safePage + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    include: {
+      project: { select: { id: true, name: true } },
+    },
+  });
+
+  const hasMore = runs.length > safePage;
+  const items = hasMore ? runs.slice(0, safePage) : runs;
+  const nextCursor = hasMore ? items[items.length - 1]?.id : undefined;
+
+  return { items, nextCursor, hasMore };
 }
 
 /**

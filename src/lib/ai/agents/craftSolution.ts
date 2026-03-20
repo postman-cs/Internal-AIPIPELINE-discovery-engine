@@ -67,7 +67,8 @@ export async function runCraftSolution(
   projectName: string,
   solutionContent: Record<string, unknown>,
   testDesignContent: Record<string, unknown>,
-  topologyContent: Record<string, unknown>
+  topologyContent: Record<string, unknown>,
+  serviceTemplateContext?: string | null
 ): Promise<{ output: CraftSolutionOutput; aiRunId: string; assumptions: AssumptionItem[]; detectedBlockers: BlockerDetection[] }> {
   const nodes = (topologyContent.nodes as unknown[]) ?? [];
 
@@ -91,7 +92,8 @@ Nodes: ${JSON.stringify(nodes.map((n: unknown) => {
   }))}
 === END TOPOLOGY ===
 
-Generate the implementation plan JSON with complete CI/CD pipeline configs for each platform relevant to the customer's stack. Include Postman collection stubs and Newman run configs for the customer's API endpoints. If the evidence indicates specific CI/CD platforms (e.g. GitHub Actions, CircleCI, Azure DevOps), generate for those; otherwise default to the three most common (GitHub Actions, GitLab CI, Jenkins).`;
+Generate the implementation plan JSON with complete CI/CD pipeline configs for each platform relevant to the customer's stack. Include Postman collection stubs and Newman run configs for the customer's API endpoints. If the evidence indicates specific CI/CD platforms (e.g. GitHub Actions, CircleCI, Azure DevOps), generate for those; otherwise default to the three most common (GitHub Actions, GitLab CI, Jenkins).
+${serviceTemplateContext ? `\n${serviceTemplateContext}\n\nIMPORTANT: A customer service template has been provided above. Generate collections, tests, and CI/CD workflows that target the REAL endpoints and schemas defined in this template rather than hypothetical ones. Extract actual paths, methods, request/response schemas, and auth patterns from the template.` : ""}`;
 
   const result = await runAgent({
     agentType: "CraftSolution",

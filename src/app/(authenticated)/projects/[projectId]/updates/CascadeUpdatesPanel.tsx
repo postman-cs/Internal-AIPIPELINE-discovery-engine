@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect, useRef, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -10,6 +11,9 @@ import {
 } from "@/lib/actions/cascade";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { LazyCanvas } from "@/components/LazyCanvas";
+
+const OrbitalProgression = dynamic(() => import("./OrbitalProgression"), { ssr: false });
 
 const PHASE_ROUTES: Record<string, string> = {
   DISCOVERY: "/discovery",
@@ -20,9 +24,11 @@ const PHASE_ROUTES: Record<string, string> = {
   TEST_DESIGN: "",
   CRAFT_SOLUTION: "",
   TEST_SOLUTION: "",
+  DEPLOYMENT_PLAN: "/execution",
+  BUILD_LOG: "/buildlog",
 };
 
-const EXECUTION_PHASES = new Set(["DEPLOYMENT_PLAN", "MONITORING", "ITERATION"]);
+const EXECUTION_PHASES = new Set(["DEPLOYMENT_PLAN", "BUILD_LOG"]);
 
 interface PhaseState {
   phase: string;
@@ -77,6 +83,7 @@ interface CascadeState {
   proposals: ProposalInfo[];
   pendingCount: number;
   jobs: JobInfo[];
+  hasServiceTemplate?: boolean;
 }
 
 const STATUS_STYLES: Record<string, { bg: string; text: string }> = {
@@ -90,6 +97,69 @@ const STATUS_STYLES: Record<string, { bg: string; text: string }> = {
   REJECTED: { bg: "rgba(239,68,68,0.1)", text: "#f87171" },
 };
 
+interface CascadeProgress {
+  completedTasks: number;
+  totalTasks: number;
+  failedTasks: number;
+  currentPhase: string | null;
+  errors: string[];
+  status: string;
+}
+
+function useCascadeProgress(projectId: string, jobId: string | null) {
+  const [progress, setProgress] = useState<CascadeProgress | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
+  const [agentOutput, setAgentOutput] = useState("");
+  const sourceRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    if (!jobId) {
+      setProgress(null);
+      setIsRunning(false);
+      setAgentOutput("");
+      return;
+    }
+
+    setIsRunning(true);
+    setAgentOutput("");
+    const es = new EventSource(`/api/projects/${projectId}/cascade/status?jobId=${jobId}`);
+    sourceRef.current = es;
+
+    es.addEventListener("progress", (e: MessageEvent) => {
+      setProgress(JSON.parse(e.data));
+    });
+
+    es.addEventListener("agent_token", (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      const text = Array.isArray(data.tokens) ? data.tokens.join("") : "";
+      setAgentOutput((prev) => prev + text);
+    });
+
+    es.addEventListener("complete", (e: MessageEvent) => {
+      setProgress(JSON.parse(e.data));
+      setIsRunning(false);
+      es.close();
+    });
+
+    es.addEventListener("error", () => {
+      setIsRunning(false);
+      es.close();
+    });
+
+    es.addEventListener("timeout", () => {
+      setIsRunning(false);
+      es.close();
+    });
+
+    return () => {
+      es.close();
+      sourceRef.current = null;
+    };
+  }, [projectId, jobId]);
+
+  return { progress, isRunning, currentPhase: progress?.currentPhase ?? null, agentOutput };
+}
+
 export function CascadeUpdatesPanel({
   projectId,
   cascadeState,
@@ -101,26 +171,66 @@ export function CascadeUpdatesPanel({
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
   const [expandedProposal, setExpandedProposal] = useState<string | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [optimisticActions, setOptimisticActions] = useState<Record<string, "accepting" | "rejecting">>({});
+
+  const { progress: cascadeProgress, isRunning: cascadeRunning, agentOutput } = useCascadeProgress(projectId, activeJobId);
+
+  useEffect(() => {
+    if (!activeJobId || cascadeRunning || !cascadeProgress) return;
+    const failed = cascadeProgress.failedTasks;
+    const errorNote = failed > 0 ? ` (${failed} errors)` : "";
+    setMessage({
+      type: failed > 0 ? "error" : "success",
+      text: `Cascade complete: ${cascadeProgress.completedTasks}/${cascadeProgress.totalTasks} phases processed.${errorNote}`,
+    });
+    setActiveJobId(null);
+    router.refresh();
+  }, [activeJobId, cascadeRunning, cascadeProgress, router]);
+
+  const preflightWarnings: string[] = [];
+  if (cascadeState.snapshots.length === 0) {
+    preflightWarnings.push("No evidence snapshots yet — results may be limited.");
+  }
+  const latestChunkCount = cascadeState.snapshots[0]?.stats?.total ?? 0;
+  if (latestChunkCount > 0 && latestChunkCount < 5) {
+    preflightWarnings.push("Very few evidence chunks ingested. Consider adding more data sources.");
+  }
+  if (!cascadeState.hasServiceTemplate && cascadeState.snapshots.length > 0) {
+    preflightWarnings.push("No service template loaded. Topology phases may produce incomplete results.");
+  }
 
   const handleTriggerUpdate = () => {
-    setMessage({ type: "info", text: "Running cascade update... This may take 30-60 seconds." });
+    setMessage(null);
     startTransition(async () => {
       const result = await triggerCascadeUpdate(projectId);
-      if (result.error) {
+      if ("error" in result && result.error) {
         setMessage({ type: "error", text: result.error });
+        return;
+      }
+      if ("jobId" in result && result.jobId) {
+        setActiveJobId(result.jobId);
+        setMessage({ type: "info", text: "Cascade update started. Monitoring progress..." });
       } else {
-        const errorNote = result.errors?.length ? ` (${result.errors.length} errors)` : "";
-        setMessage({ type: "success", text: `Cascade complete: ${result.impactedPhases?.length ?? 0} phases impacted, ${result.proposalCount ?? 0} proposals created.${errorNote}` });
+        const phases = "impactedPhases" in result ? (result.impactedPhases as string[]) : [];
+        setMessage({ type: "success", text: `Cascade complete: ${phases.length} phases impacted.` });
         router.refresh();
       }
     });
   };
 
   const handleAccept = (proposalId: string) => {
+    setOptimisticActions(prev => ({ ...prev, [proposalId]: "accepting" }));
     startTransition(async () => {
       const result = await acceptProposal(proposalId);
-      if (result.error) setMessage({ type: "error", text: result.error });
-      else {
+      if (result.error) {
+        setOptimisticActions(prev => {
+          const next = { ...prev };
+          delete next[proposalId];
+          return next;
+        });
+        setMessage({ type: "error", text: result.error });
+      } else {
         setMessage({ type: "success", text: `Accepted! New v${result.newVersion} created.` });
         router.refresh();
       }
@@ -128,17 +238,35 @@ export function CascadeUpdatesPanel({
   };
 
   const handleReject = (proposalId: string) => {
+    setOptimisticActions(prev => ({ ...prev, [proposalId]: "rejecting" }));
     startTransition(async () => {
       const result = await rejectProposal(proposalId);
-      if (result.error) setMessage({ type: "error", text: result.error });
-      else {
+      if (result.error) {
+        setOptimisticActions(prev => {
+          const next = { ...prev };
+          delete next[proposalId];
+          return next;
+        });
+        setMessage({ type: "error", text: result.error });
+      } else {
         setMessage({ type: "success", text: "Proposal rejected." });
         router.refresh();
       }
     });
   };
 
-  const pendingProposals = cascadeState.proposals.filter((p) => p.status === "PENDING");
+  const handlePhaseSelect = useCallback((phase: string | null) => {
+    if (!phase) return;
+    const route = PHASE_ROUTES[phase] ?? "";
+    router.push(`/projects/${projectId}${route}`);
+  }, [projectId, router]);
+
+  const pendingProposals = cascadeState.proposals.filter(
+    (p) => p.status === "PENDING" && !optimisticActions[p.id]
+  );
+  const optimisticProposals = cascadeState.proposals.filter(
+    (p) => p.status === "PENDING" && optimisticActions[p.id]
+  );
   const resolvedProposals = cascadeState.proposals.filter((p) => p.status !== "PENDING");
 
   return (
@@ -156,14 +284,73 @@ export function CascadeUpdatesPanel({
         </div>
       )}
 
+      {preflightWarnings.length > 0 && (
+        <div className="space-y-1.5">
+          {preflightWarnings.map((w, i) => (
+            <div
+              key={i}
+              className="text-xs rounded-lg px-3 py-2 flex items-center gap-2"
+              style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.12)", color: "#fbbf24" }}
+            >
+              <span>⚠</span> {w}
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="flex items-center gap-4 flex-wrap">
-        <button onClick={handleTriggerUpdate} disabled={isPending} className="btn-primary text-sm py-2.5 px-5 disabled:opacity-50">
-          {isPending ? "Running Cascade..." : "Run Cascade Update"}
+        <button onClick={handleTriggerUpdate} disabled={isPending || cascadeRunning} className="btn-primary text-sm py-2.5 px-5 disabled:opacity-50">
+          {cascadeRunning ? "Cascade Running..." : isPending ? "Starting Cascade..." : "Run Cascade Update"}
         </button>
         {cascadeState.pendingCount > 0 && (
           <span className="badge-info">{cascadeState.pendingCount} pending proposal{cascadeState.pendingCount > 1 ? "s" : ""}</span>
         )}
       </div>
+
+      {cascadeRunning && cascadeProgress && (
+        <div className="rounded-xl px-4 py-3" style={{ background: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.12)" }}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium" style={{ color: "#60a5fa" }}>
+              {cascadeProgress.currentPhase
+                ? `Running ${cascadeProgress.currentPhase.replace(/_/g, " ")}...`
+                : "Initializing..."}
+            </span>
+            <span className="text-xs" style={{ color: "var(--foreground-dim)" }}>
+              {cascadeProgress.completedTasks}/{cascadeProgress.totalTasks} complete
+              {cascadeProgress.failedTasks > 0 && (
+                <span style={{ color: "#f87171" }}> · {cascadeProgress.failedTasks} failed</span>
+              )}
+            </span>
+          </div>
+          <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.05)" }}>
+            <div
+              className="h-full rounded-full transition-all duration-500"
+              style={{
+                width: `${cascadeProgress.totalTasks > 0 ? (cascadeProgress.completedTasks / cascadeProgress.totalTasks) * 100 : 0}%`,
+                background: cascadeProgress.failedTasks > 0
+                  ? "linear-gradient(90deg, #60a5fa, #f59e0b)"
+                  : "linear-gradient(90deg, #60a5fa, #34d399)",
+              }}
+            />
+          </div>
+          {agentOutput && (
+            <details open className="mt-3 rounded-lg overflow-hidden" style={{ border: "1px solid rgba(59,130,246,0.08)" }}>
+              <summary
+                className="cursor-pointer px-4 py-2 text-xs font-medium select-none"
+                style={{ color: "#60a5fa", background: "rgba(59,130,246,0.04)" }}
+              >
+                Live Agent Output
+              </summary>
+              <div
+                className="px-4 py-3 prose prose-sm prose-invert max-w-none max-h-64 overflow-y-auto text-xs"
+                style={{ background: "var(--background-secondary)" }}
+              >
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{agentOutput}</ReactMarkdown>
+              </div>
+            </details>
+          )}
+        </div>
+      )}
 
       {cascadeState.snapshots.length > 0 && (
         <div className="card">
@@ -172,6 +359,17 @@ export function CascadeUpdatesPanel({
         </div>
       )}
 
+      {/* Orbital Progression Visualization */}
+      <LazyCanvas>
+        <OrbitalProgression
+          phaseGraph={cascadeState.phaseGraph}
+          proposals={cascadeState.proposals}
+          jobs={cascadeState.jobs}
+          onPhaseSelect={handlePhaseSelect}
+        />
+      </LazyCanvas>
+
+      {/* Phase Graph (compact reference) */}
       <div className="card">
         <h2 className="text-sm font-semibold mb-3" style={{ color: "var(--foreground)" }}>Phase Graph</h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
@@ -181,10 +379,38 @@ export function CascadeUpdatesPanel({
         </div>
       </div>
 
-      {pendingProposals.length > 0 && (
+      {(pendingProposals.length > 0 || optimisticProposals.length > 0) && (
         <div className="card">
           <h2 className="text-sm font-semibold mb-3" style={{ color: "var(--foreground)" }}>Pending Proposals</h2>
           <div className="space-y-3">
+            {optimisticProposals.map((p) => {
+              const action = optimisticActions[p.id];
+              const route = PHASE_ROUTES[p.phase] ?? "";
+              const artifactHref = route ? `/projects/${projectId}${route}` : null;
+              return (
+                <div
+                  key={p.id}
+                  className="rounded-xl px-4 py-3 flex items-center justify-between"
+                  style={{
+                    border: `1px solid ${action === "accepting" ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.2)"}`,
+                    background: action === "accepting" ? "rgba(16,185,129,0.04)" : "rgba(239,68,68,0.04)",
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="inline-block w-3 h-3 rounded-full animate-pulse" style={{ background: action === "accepting" ? "#34d399" : "#f87171" }} />
+                    <span className="text-sm font-medium" style={{ color: "var(--foreground)" }}>{p.phase.replace(/_/g, " ")}</span>
+                    <span className="text-xs" style={{ color: "var(--foreground-dim)" }}>
+                      {action === "accepting" ? "Accepting..." : "Rejecting..."}
+                    </span>
+                  </div>
+                  {action === "accepting" && artifactHref && (
+                    <Link href={artifactHref} className="text-xs font-medium transition-colors hover:underline" style={{ color: "#34d399" }}>
+                      View artifact →
+                    </Link>
+                  )}
+                </div>
+              );
+            })}
             {pendingProposals.map((p) => (
               <ProposalCard
                 key={p.id}
@@ -204,16 +430,25 @@ export function CascadeUpdatesPanel({
         <div className="card">
           <h2 className="text-sm font-semibold mb-3" style={{ color: "var(--foreground)" }}>Resolved Proposals</h2>
           <div className="space-y-2">
-            {resolvedProposals.map((p) => (
-              <div key={p.id} className="flex items-center justify-between py-2 px-3 rounded-lg" style={{ background: "var(--background-secondary)" }}>
-                <div className="flex items-center gap-3">
-                  <StatusBadge status={p.status} />
-                  <span className="text-sm" style={{ color: "var(--foreground)" }}>{p.phase} (v{p.baseVersion})</span>
-                  <span className="text-xs" style={{ color: "var(--foreground-dim)" }}>{p.patchOps} changes</span>
+            {resolvedProposals.map((p) => {
+              const route = PHASE_ROUTES[p.phase] ?? "";
+              const artifactHref = route ? `/projects/${projectId}${route}` : null;
+              return (
+                <div key={p.id} className="flex items-center justify-between py-2 px-3 rounded-lg" style={{ background: "var(--background-secondary)" }}>
+                  <div className="flex items-center gap-3">
+                    <StatusBadge status={p.status} />
+                    <span className="text-sm" style={{ color: "var(--foreground)" }}>{p.phase} (v{p.baseVersion})</span>
+                    <span className="text-xs" style={{ color: "var(--foreground-dim)" }}>{p.patchOps} changes</span>
+                    {p.status === "ACCEPTED" && artifactHref && (
+                      <Link href={artifactHref} className="text-xs font-medium transition-colors hover:underline" style={{ color: "#34d399" }}>
+                        View artifact →
+                      </Link>
+                    )}
+                  </div>
+                  <span className="text-xs" style={{ color: "var(--foreground-dim)" }}>{p.resolvedAt ? new Date(p.resolvedAt).toLocaleDateString() : ""}</span>
                 </div>
-                <span className="text-xs" style={{ color: "var(--foreground-dim)" }}>{p.resolvedAt ? new Date(p.resolvedAt).toLocaleDateString() : ""}</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

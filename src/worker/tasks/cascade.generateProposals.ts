@@ -40,7 +40,7 @@ const task: Task = async (payload, helpers) => {
       where: { id: projectId },
       select: { ownerUserId: true, jiraIssueId: true },
     });
-    if (project?.jiraIssueId) {
+    if (project?.jiraIssueId && project.ownerUserId) {
       const { syncJiraDescription } = await import("@/lib/jira/client");
       await syncJiraDescription(projectId, project.ownerUserId);
     }

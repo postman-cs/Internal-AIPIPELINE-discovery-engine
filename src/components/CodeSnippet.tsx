@@ -47,6 +47,108 @@ function DownloadIcon({ size = 14 }: { size?: number }) {
   );
 }
 
+// Lightweight regex-based syntax highlighter using platform colors
+function tokenize(line: string, language: string): React.ReactNode {
+  const tokens: { text: string; color?: string }[] = [];
+
+  const rules: { pattern: RegExp; color: string }[] = (() => {
+    switch (language) {
+      case "json":
+        return [
+          { pattern: /"[^"]*"\s*(?=:)/g, color: "var(--accent-cyan)" },
+          { pattern: /:\s*"[^"]*"/g, color: "#a5d6a7" },
+          { pattern: /:\s*(-?\d+\.?\d*)/g, color: "#ffcc80" },
+          { pattern: /:\s*(true|false|null)/g, color: "#ce93d8" },
+          { pattern: /[{}[\],]/g, color: "var(--foreground-dim)" },
+        ];
+      case "yaml":
+      case "yml":
+        return [
+          { pattern: /^(\s*[\w.-]+)\s*:/gm, color: "var(--accent-cyan)" },
+          { pattern: /:\s*(.+)/g, color: "#a5d6a7" },
+          { pattern: /^\s*#.*/gm, color: "var(--foreground-dim)" },
+          { pattern: /^\s*-\s/gm, color: "#ffcc80" },
+        ];
+      case "bash":
+      case "shell":
+        return [
+          { pattern: /#.*/g, color: "var(--foreground-dim)" },
+          { pattern: /\b(if|then|else|fi|for|do|done|while|case|esac|function|return|export|source|alias|echo|cd|mkdir|rm|cp|mv|chmod|chown|sudo|apt|npm|npx|yarn|pip|git|docker|curl|wget)\b/g, color: "var(--accent-cyan)" },
+          { pattern: /"[^"]*"|'[^']*'/g, color: "#a5d6a7" },
+          { pattern: /\$[\w{}]+/g, color: "#ffcc80" },
+        ];
+      case "typescript":
+      case "javascript":
+        return [
+          { pattern: /\/\/.*/g, color: "var(--foreground-dim)" },
+          { pattern: /\b(const|let|var|function|return|if|else|for|while|import|export|from|class|extends|new|async|await|try|catch|throw|typeof|instanceof)\b/g, color: "var(--accent-cyan)" },
+          { pattern: /"[^"]*"|'[^']*'|`[^`]*`/g, color: "#a5d6a7" },
+          { pattern: /\b(\d+\.?\d*)\b/g, color: "#ffcc80" },
+        ];
+      case "dockerfile":
+        return [
+          { pattern: /#.*/g, color: "var(--foreground-dim)" },
+          { pattern: /^(FROM|RUN|CMD|ENTRYPOINT|COPY|ADD|ENV|EXPOSE|WORKDIR|ARG|LABEL|VOLUME|USER|HEALTHCHECK)\b/gm, color: "var(--accent-cyan)" },
+          { pattern: /"[^"]*"/g, color: "#a5d6a7" },
+        ];
+      case "hcl":
+        return [
+          { pattern: /#.*/g, color: "var(--foreground-dim)" },
+          { pattern: /\b(resource|variable|output|module|provider|data|locals|terraform)\b/g, color: "var(--accent-cyan)" },
+          { pattern: /"[^"]*"/g, color: "#a5d6a7" },
+          { pattern: /\b(\d+)\b/g, color: "#ffcc80" },
+        ];
+      case "groovy":
+        return [
+          { pattern: /\/\/.*/g, color: "var(--foreground-dim)" },
+          { pattern: /\b(pipeline|agent|stages|stage|steps|post|environment|when|script|def|node|any|none)\b/g, color: "var(--accent-cyan)" },
+          { pattern: /'[^']*'|"[^"]*"/g, color: "#a5d6a7" },
+        ];
+      default:
+        return [
+          { pattern: /#.*/g, color: "var(--foreground-dim)" },
+          { pattern: /"[^"]*"|'[^']*'/g, color: "#a5d6a7" },
+        ];
+    }
+  })();
+
+  // Simple approach: apply the first matching rule for each character range
+  const colored: { start: number; end: number; color: string }[] = [];
+  for (const rule of rules) {
+    rule.pattern.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = rule.pattern.exec(line)) !== null) {
+      const start = m.index;
+      const end = start + m[0].length;
+      const overlaps = colored.some((c) => start < c.end && end > c.start);
+      if (!overlaps) colored.push({ start, end, color: rule.color });
+    }
+  }
+
+  colored.sort((a, b) => a.start - b.start);
+
+  let pos = 0;
+  for (const c of colored) {
+    if (c.start > pos) tokens.push({ text: line.slice(pos, c.start) });
+    tokens.push({ text: line.slice(c.start, c.end), color: c.color });
+    pos = c.end;
+  }
+  if (pos < line.length) tokens.push({ text: line.slice(pos) });
+  if (tokens.length === 0) return line || "\u00A0";
+
+  return (
+    <>
+      {tokens.map((t, i) =>
+        t.color ? (
+          <span key={i} style={{ color: t.color }}>{t.text}</span>
+        ) : (
+          <span key={i}>{t.text}</span>
+        )
+      )}
+    </>
+  );
+}
+
 interface CodeSnippetProps {
   code: string;
   language: string;
@@ -208,7 +310,7 @@ export function CodeSnippet({
                       paddingBottom: i === lines.length - 1 ? "0.75rem" : "0",
                     }}
                   >
-                    {line || "\u00A0"}
+                    {tokenize(line, language)}
                   </td>
                 </tr>
               ))}
@@ -219,7 +321,9 @@ export function CodeSnippet({
             className="p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"
             style={{ color: "var(--foreground-muted)" }}
           >
-            {code}
+            {lines.map((line, i) => (
+              <span key={i}>{tokenize(line, language)}{i < lines.length - 1 ? "\n" : ""}</span>
+            ))}
           </pre>
         )}
       </div>

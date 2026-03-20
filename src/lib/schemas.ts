@@ -37,7 +37,7 @@ export const discoveryArtifactSchema = z.object({
   // Company Snapshot
   industry: z.string().optional().or(z.literal("")),
   engineeringSize: z.string().optional().or(z.literal("")),
-  publicApiPresence: z.enum(["Yes", "No", "Partial", ""]).optional().default(""),
+  publicApiPresence: z.enum(["Yes", "No", "Partial", "Unknown", ""]).optional().default(""),
 
   // Technical Landscape
   technicalLandscape: z.array(z.object({

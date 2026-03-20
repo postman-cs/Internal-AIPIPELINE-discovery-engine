@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { getAllAIRuns, getAIRunStats } from "@/lib/actions/discovery";
+import { getPaginatedAIRuns, getAIRunStats } from "@/lib/actions/discovery";
 import { AIRunsTable } from "./AIRunsTable";
 
 export default async function AIRunsPage() {
-  const [runs, stats] = await Promise.all([
-    getAllAIRuns(100),
+  const [initialPage, stats] = await Promise.all([
+    getPaginatedAIRuns(25),
     getAIRunStats(),
   ]);
 
@@ -42,7 +42,7 @@ export default async function AIRunsPage() {
       </div>
 
       {/* Runs Table */}
-      {runs.length === 0 ? (
+      {initialPage.items.length === 0 ? (
         <div className="card text-center py-12">
           <p className="text-sm" style={{ color: "var(--foreground-muted)" }}>
             No AI runs yet. Ingest evidence and run the Discovery Pipeline on a
@@ -57,7 +57,11 @@ export default async function AIRunsPage() {
           </Link>
         </div>
       ) : (
-        <AIRunsTable runs={runs} />
+        <AIRunsTable
+          initialRuns={initialPage.items}
+          initialCursor={initialPage.nextCursor}
+          initialHasMore={initialPage.hasMore}
+        />
       )}
     </div>
   );

@@ -3,13 +3,16 @@ import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 import { timingSafeEqual } from "crypto";
 
+const FLEET = [
+  { email: "jared@postman.com", name: "Jared", role: "ADMIN" as const, password: "admiral123" },
+  { email: "daniel@postman.com", name: "Daniel", role: "CSE" as const, password: "pipeline123" },
+];
+
 export async function POST(request: NextRequest) {
-  // Block in production — middleware also blocks this, but defense-in-depth
   if (process.env.NODE_ENV === "production") {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // In non-production, require a seed token if one is configured
   const seedToken = process.env.SEED_TOKEN;
   if (seedToken) {
     const authHeader = request.headers.get("authorization") ?? "";
@@ -20,64 +23,37 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const passwordHash = await bcrypt.hash("pipeline123", 10);
-  const adminPasswordHash = await bcrypt.hash("admin123", 10);
+  const seeded = [];
 
-  // Seed admin user
-  await prisma.user.upsert({
-    where: { email: "admin@postman.com" },
-    update: { isAdmin: true },
-    create: {
-      email: "admin@postman.com",
-      name: "Admin",
-      passwordHash: adminPasswordHash,
-      isAdmin: true,
-    },
-  });
+  for (const member of FLEET) {
+    const hash = await bcrypt.hash(member.password, 10);
+    await prisma.user.upsert({
+      where: { email: member.email },
+      update: { role: member.role, isAdmin: member.role === "ADMIN", name: member.name },
+      create: {
+        email: member.email,
+        name: member.name,
+        passwordHash: hash,
+        role: member.role,
+        isAdmin: member.role === "ADMIN",
+      },
+    });
+    seeded.push({ email: member.email, password: member.password, role: member.role });
+  }
 
-  // Seed regular CSE user
-  const user = await prisma.user.upsert({
-    where: { email: "cse@postman.com" },
-    update: {},
-    create: {
-      email: "cse@postman.com",
-      name: "CSE Demo User",
-      passwordHash,
-    },
-  });
-
-  await prisma.project.upsert({
-    where: { id: "seed-project-1" },
-    update: {},
-    create: {
-      id: "seed-project-1",
-      name: "Acme Corp",
-      primaryDomain: "acme.com",
-      apiDomain: "api.acme.com",
-      publicWorkspaceUrl:
-        "https://www.postman.com/acme/workspace/acme-public-api",
-      ownerUserId: user.id,
-    },
-  });
-
-  await prisma.project.upsert({
-    where: { id: "seed-project-2" },
-    update: {},
-    create: {
-      id: "seed-project-2",
-      name: "TechStart Inc",
-      primaryDomain: "techstart.io",
-      ownerUserId: user.id,
-    },
-  });
+  // Also update legacy admin/cse accounts if they exist
+  const legacyAdmin = await prisma.user.findUnique({ where: { email: "admin@postman.com" } });
+  if (legacyAdmin) {
+    await prisma.user.update({ where: { id: legacyAdmin.id }, data: { role: "ADMIN", isAdmin: true } });
+  }
+  const legacyCse = await prisma.user.findUnique({ where: { email: "cse@postman.com" } });
+  if (legacyCse) {
+    await prisma.user.update({ where: { id: legacyCse.id }, data: { role: "CSE" } });
+  }
 
   return NextResponse.json({
     success: true,
-    message: "Seed data created",
-    users: [
-      { email: "admin@postman.com", password: "admin123", role: "admin" },
-      { email: "cse@postman.com", password: "pipeline123", role: "user" },
-    ],
-    projects: ["Acme Corp", "TechStart Inc"],
+    message: "Fleet seeded",
+    fleet: seeded,
   });
 }

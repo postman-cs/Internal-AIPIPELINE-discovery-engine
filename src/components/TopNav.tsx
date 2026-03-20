@@ -2,16 +2,19 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState, useRef, useEffect } from "react";
 import { logoutAction } from "@/lib/actions/auth";
+import { NotificationBell } from "@/components/NotificationBell";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: "grid" },
   { href: "/ingest", label: "Ingest", icon: "download" },
   { href: "/projects", label: "Projects", icon: "folder" },
+  { href: "/architect", label: "Architect", icon: "architect" },
   { href: "/dashboard/ai-runs", label: "AI Runs", icon: "activity" },
 ];
 
-const ADMIN_ITEM = { href: "/admin", label: "Admin", icon: "admin" };
+const ADMIN_ITEM = { href: "/admiral", label: "Admiral", icon: "admin" };
 
 function NavIcon({ icon, className }: { icon: string; className?: string }) {
   const cn = className || "w-3.5 h-3.5";
@@ -40,6 +43,12 @@ function NavIcon({ icon, className }: { icon: string; className?: string }) {
           <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
         </svg>
       );
+    case "architect":
+      return (
+        <svg className={cn} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6.429 9.75L2.25 12l4.179 2.25m0-4.5l5.571 3 5.571-3m-11.142 0L2.25 7.5 12 2.25l9.75 5.25-4.179 2.25m0 0L12 12.75 6.429 9.75m11.142 0l4.179 2.25-4.179 2.25m0 0L12 17.25l-5.571-3m11.142 0l4.179 2.25L12 21.75l-9.75-5.25 4.179-2.25" />
+        </svg>
+      );
     case "admin":
       return (
         <svg className={cn} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -51,8 +60,34 @@ function NavIcon({ icon, className }: { icon: string; className?: string }) {
   }
 }
 
-export function TopNav({ userName, isAdmin }: { userName?: string; isAdmin?: boolean }) {
+function getInitials(name: string): string {
+  return name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2);
+}
+
+function nameToColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 55%, 45%)`;
+}
+
+export function TopNav({ userName, userEmail, userRole, isAdmin }: { userName?: string; userEmail?: string; userRole?: string; isAdmin?: boolean }) {
   const pathname = usePathname();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
+        setProfileOpen(false);
+      }
+    }
+    if (profileOpen) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [profileOpen]);
+
+  const navItems = [...NAV_ITEMS, ...(isAdmin ? [ADMIN_ITEM] : [])];
 
   return (
     <header
@@ -77,15 +112,15 @@ export function TopNav({ userName, isAdmin }: { userName?: string; isAdmin?: boo
               >
                 <span className="text-white text-xs font-bold">CL</span>
               </div>
-              <span className="font-semibold text-sm" style={{ color: "var(--foreground)" }}>
+              <span className="font-semibold text-sm hidden sm:inline" style={{ color: "var(--foreground)" }}>
                 CortexLab
               </span>
             </Link>
-            <nav className="flex items-center gap-0.5" aria-label="Main navigation">
-              {[...NAV_ITEMS, ...(isAdmin ? [ADMIN_ITEM] : [])].map((item) => {
-                const isActive =
-                  pathname === item.href ||
-                  pathname.startsWith(item.href + "/");
+
+            {/* Desktop nav */}
+            <nav className="hidden md:flex items-center gap-0.5" aria-label="Main navigation">
+              {navItems.map((item) => {
+                const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
                 return (
                   <Link
                     key={item.href}
@@ -99,35 +134,133 @@ export function TopNav({ userName, isAdmin }: { userName?: string; isAdmin?: boo
                 );
               })}
             </nav>
-          </div>
-          <div className="flex items-center gap-4">
-            {userName && (
-              <span className="text-sm" style={{ color: "var(--foreground-dim)" }}>
-                {userName}
-              </span>
-            )}
-            <Link
-              href="/settings"
-              className="topnav-link flex items-center gap-1 px-2 py-1.5 rounded-lg text-sm font-medium transition-all duration-200"
-              aria-label="Settings"
+
+            {/* Hamburger for mobile */}
+            <button
+              className="md:hidden flex items-center justify-center w-8 h-8 rounded-lg"
+              style={{ color: "var(--foreground-dim)" }}
+              onClick={() => setMobileOpen(!mobileOpen)}
+              aria-label="Toggle menu"
             >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 011.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.56.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.893.149c-.425.07-.765.383-.93.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 01-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.397.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 01-.12-1.45l.527-.737c.25-.35.273-.806.108-1.204-.165-.397-.505-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.107-1.204l-.527-.738a1.125 1.125 0 01.12-1.45l.773-.773a1.125 1.125 0 011.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                {mobileOpen ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                )}
               </svg>
-            </Link>
-            <form action={logoutAction}>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <NotificationBell />
+
+            {/* Profile dropdown */}
+            <div className="relative" ref={profileRef}>
               <button
-                type="submit"
-                className="topnav-link text-sm transition-colors duration-200"
-                aria-label="Log out"
+                onClick={() => setProfileOpen(!profileOpen)}
+                className="flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold transition-all duration-200 hover:ring-2 hover:ring-white/10"
+                style={{ background: userName ? nameToColor(userName) : "#475569", color: "#fff" }}
+                aria-label="User menu"
               >
-                Logout
+                {userName ? getInitials(userName) : "?"}
               </button>
-            </form>
+
+              {profileOpen && (
+                <div
+                  className="absolute right-0 top-full mt-2 w-56 rounded-xl shadow-2xl overflow-hidden z-50"
+                  style={{
+                    background: "var(--surface)",
+                    border: "1px solid var(--border-bright)",
+                    boxShadow: "0 0 40px rgba(0,0,0,0.4)",
+                  }}
+                >
+                  <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+                    <p className="text-sm font-medium truncate" style={{ color: "var(--foreground)" }}>{userName || "User"}</p>
+                    {userEmail && <p className="text-[11px] truncate mt-0.5" style={{ color: "var(--foreground-dim)" }}>{userEmail}</p>}
+                    {userRole && (
+                      <span
+                        className="inline-block text-[9px] uppercase tracking-wider font-semibold mt-1.5 px-1.5 py-0.5 rounded"
+                        style={{
+                          background: (userRole === "ADMIRAL" || userRole === "ADMIN") ? "rgba(201,162,39,0.1)" : "rgba(6,214,214,0.08)",
+                          color: (userRole === "ADMIRAL" || userRole === "ADMIN") ? "#c9a227" : "var(--accent-cyan)",
+                          border: `1px solid ${(userRole === "ADMIRAL" || userRole === "ADMIN") ? "rgba(201,162,39,0.2)" : "rgba(6,214,214,0.15)"}`,
+                        }}
+                      >
+                        {userRole}
+                      </span>
+                    )}
+                  </div>
+                  <div className="py-1">
+                    <Link
+                      href="/settings"
+                      className="flex items-center gap-2.5 px-4 py-2 text-sm transition-colors"
+                      style={{ color: "var(--foreground)" }}
+                      onClick={() => setProfileOpen(false)}
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 011.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.56.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.893.149c-.425.07-.765.383-.93.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 01-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.397.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 01-.12-1.45l.527-.737c.25-.35.273-.806.108-1.204-.165-.397-.505-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.107-1.204l-.527-.738a1.125 1.125 0 01.12-1.45l.773-.773a1.125 1.125 0 011.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                      Settings
+                    </Link>
+                    <Link
+                      href="/dashboard/ai-runs"
+                      className="flex items-center gap-2.5 px-4 py-2 text-sm transition-colors"
+                      style={{ color: "var(--foreground)" }}
+                      onClick={() => setProfileOpen(false)}
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      AI Runs
+                    </Link>
+                  </div>
+                  <div style={{ borderTop: "1px solid var(--border)" }}>
+                    <form action={logoutAction}>
+                      <button
+                        type="submit"
+                        className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-left transition-colors"
+                        style={{ color: "var(--accent-red, #f87171)" }}
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
+                        </svg>
+                        Logout
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Mobile menu drawer */}
+      {mobileOpen && (
+        <nav
+          className="md:hidden px-4 pb-3 space-y-1"
+          style={{ borderTop: "1px solid var(--border)" }}
+          aria-label="Mobile navigation"
+        >
+          {navItems.map((item) => {
+            const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => setMobileOpen(false)}
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-all min-h-[44px] ${isActive ? "topnav-active" : "topnav-link"}`}
+                aria-current={isActive ? "page" : undefined}
+              >
+                <NavIcon icon={item.icon} />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+      )}
     </header>
   );
 }

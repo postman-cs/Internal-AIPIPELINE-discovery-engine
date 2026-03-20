@@ -60,7 +60,7 @@ export async function buildEngagementPackage(projectId: string): Promise<Engagem
     "DISCOVERY", "CURRENT_TOPOLOGY", "DESIRED_FUTURE_STATE",
     "SOLUTION_DESIGN", "INFRASTRUCTURE", "TEST_DESIGN",
     "CRAFT_SOLUTION", "TEST_SOLUTION", "DEPLOYMENT_PLAN",
-    "MONITORING", "ITERATION",
+    "BUILD_LOG",
   ];
 
   const artifacts = await prisma.phaseArtifact.findMany({
@@ -241,7 +241,7 @@ export async function buildEngagementPackage(projectId: string): Promise<Engagem
     { phase: "INFRASTRUCTURE", filename: "infrastructure-plan.md" },
     { phase: "TEST_DESIGN", filename: "test-design.md" },
     { phase: "DEPLOYMENT_PLAN", filename: "deployment-plan.md" },
-    { phase: "MONITORING", filename: "monitoring-plan.md" },
+    { phase: "BUILD_LOG", filename: "build-log.md" },
   ];
 
   for (const { phase, filename } of docPhases) {

@@ -53,7 +53,7 @@ export async function GET(
         select: { contentJson: true },
       }),
       prisma.phaseArtifact.findFirst({
-        where: { projectId, phase: "MONITORING", status: "CLEAN" },
+        where: { projectId, phase: "BUILD_LOG", status: "CLEAN" },
         orderBy: { version: "desc" },
         select: { contentJson: true },
       }),
@@ -84,22 +84,29 @@ export async function GET(
       hasMonitoring: monitorTargets.has(score.nodeId) || monitorTargets.has(score.nodeName),
     }));
 
-    return Response.json({
-      topology: {
-        version: artifact.version,
-        status: artifact.status,
-        nodes,
-        edges,
-        reasoningSummary: content?.reasoningSummary ?? null,
+    return Response.json(
+      {
+        topology: {
+          version: artifact.version,
+          status: artifact.status,
+          nodes,
+          edges,
+          reasoningSummary: content?.reasoningSummary ?? null,
+        },
+        heatmap: heatmapWithCoverage,
+        coverage: {
+          solutionDesignNodes: solutionTargets.size,
+          testCoverageNodes: testTargets.size,
+          monitoringNodes: monitorTargets.size,
+          totalNodes: nodes.length,
+        },
       },
-      heatmap: heatmapWithCoverage,
-      coverage: {
-        solutionDesignNodes: solutionTargets.size,
-        testCoverageNodes: testTargets.size,
-        monitoringNodes: monitorTargets.size,
-        totalNodes: nodes.length,
-      },
-    });
+      {
+        headers: {
+          "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600",
+        },
+      }
+    );
   } catch (error) {
     return rbacErrorResponse(error);
   }

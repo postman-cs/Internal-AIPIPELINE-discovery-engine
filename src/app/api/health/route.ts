@@ -38,12 +38,19 @@ export async function GET() {
     return NextResponse.json({ status: "healthy" });
   }
 
-  return NextResponse.json({
-    status: "healthy",
-    version: process.env.npm_package_version || "0.1.0",
-    uptime: process.uptime(),
-    environment: process.env.NODE_ENV || "development",
-    checks,
-    totalMs: Date.now() - start,
-  });
+  return NextResponse.json(
+    {
+      status: "healthy",
+      version: process.env.npm_package_version || "0.1.0",
+      uptime: process.uptime(),
+      environment: process.env.NODE_ENV || "development",
+      checks,
+      totalMs: Date.now() - start,
+    },
+    {
+      headers: {
+        "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30",
+      },
+    }
+  );
 }
