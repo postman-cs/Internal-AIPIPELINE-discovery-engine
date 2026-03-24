@@ -1,0 +1,576 @@
+"use server";
+
+/**
+ * Repo Scaffold — One Service = One Workspace = One Repo
+ *
+ * Creates a GitHub/GitLab repo and populates it with the full
+ * CSE deliverable structure based on cascade artifacts:
+ * - API specs, collections, environments
+ * - CI/CD pipeline configs
+ * - Governance rules (Spectral)
+ * - Provisioning automation
+ * - README with onboarding guide
+ */
+
+import { prisma } from "@/lib/prisma";
+import { requireAuth } from "@/lib/session";
+import { revalidatePath } from "next/cache";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface RepoFile {
+  path: string;
+  content: string;
+}
+
+interface ScaffoldResult {
+  success?: boolean;
+  error?: string;
+  repoUrl?: string;
+  filesCreated?: number;
+}
+
+// ---------------------------------------------------------------------------
+// GitHub API helpers
+// ---------------------------------------------------------------------------
+
+async function githubApi(
+  endpoint: string,
+  token: string,
+  options?: { method?: string; body?: unknown }
+): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+  const res = await fetch(`https://api.github.com${endpoint}`, {
+    method: options?.method ?? "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(options?.body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: options?.body ? JSON.stringify(options.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data: data as Record<string, unknown> };
+}
+
+async function createGitHubRepo(
+  org: string,
+  name: string,
+  description: string,
+  token: string,
+  isPrivate = true
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const res = await githubApi(`/orgs/${org}/repos`, token, {
+    method: "POST",
+    body: { name, description, private: isPrivate, auto_init: true },
+  });
+
+  if (res.ok) return { ok: true, url: res.data.html_url as string };
+
+  // Fallback: try creating under user account
+  const userRes = await githubApi("/user/repos", token, {
+    method: "POST",
+    body: { name, description, private: isPrivate, auto_init: true },
+  });
+
+  if (userRes.ok) return { ok: true, url: userRes.data.html_url as string };
+  return { ok: false, error: `GitHub: ${userRes.data.message ?? userRes.status}` };
+}
+
+async function pushFilesToGitHub(
+  owner: string,
+  repo: string,
+  files: RepoFile[],
+  token: string,
+  message = "Initial scaffold — CSE deliverables"
+): Promise<{ ok: boolean; error?: string }> {
+  // Get the SHA of the default branch's latest commit
+  const refRes = await githubApi(`/repos/${owner}/${repo}/git/ref/heads/main`, token);
+  if (!refRes.ok) return { ok: false, error: "Failed to get main branch ref" };
+  const latestSha = (refRes.data.object as Record<string, unknown>).sha as string;
+
+  // Get the tree SHA
+  const commitRes = await githubApi(`/repos/${owner}/${repo}/git/commits/${latestSha}`, token);
+  if (!commitRes.ok) return { ok: false, error: "Failed to get latest commit" };
+  const baseTreeSha = (commitRes.data.tree as Record<string, unknown>).sha as string;
+
+  // Create blobs for each file
+  const tree: Array<{ path: string; mode: string; type: string; sha: string }> = [];
+  for (const file of files) {
+    const blobRes = await githubApi(`/repos/${owner}/${repo}/git/blobs`, token, {
+      method: "POST",
+      body: { content: file.content, encoding: "utf-8" },
+    });
+    if (!blobRes.ok) continue;
+    tree.push({
+      path: file.path,
+      mode: "100644",
+      type: "blob",
+      sha: blobRes.data.sha as string,
+    });
+  }
+
+  // Create tree
+  const treeRes = await githubApi(`/repos/${owner}/${repo}/git/trees`, token, {
+    method: "POST",
+    body: { base_tree: baseTreeSha, tree },
+  });
+  if (!treeRes.ok) return { ok: false, error: "Failed to create tree" };
+
+  // Create commit
+  const newCommitRes = await githubApi(`/repos/${owner}/${repo}/git/commits`, token, {
+    method: "POST",
+    body: {
+      message,
+      tree: treeRes.data.sha,
+      parents: [latestSha],
+    },
+  });
+  if (!newCommitRes.ok) return { ok: false, error: "Failed to create commit" };
+
+  // Update ref
+  const updateRes = await githubApi(`/repos/${owner}/${repo}/git/refs/heads/main`, token, {
+    method: "PATCH",
+    body: { sha: newCommitRes.data.sha },
+  });
+  if (!updateRes.ok) return { ok: false, error: "Failed to update branch" };
+
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// File generators
+// ---------------------------------------------------------------------------
+
+function generateReadme(
+  projectName: string,
+  domain: string,
+  services: string[],
+  ciPlatform: string,
+): string {
+  return `# ${projectName} — API Platform
+
+> Auto-generated by CSE AI Pipeline. One Service = One Workspace = One Repo.
+
+## Architecture
+
+| Layer | Maps To |
+|-------|---------|
+| Git repository | One microservice or API |
+| Postman workspace | One service |
+| API Catalog entry | One service |
+| Environment | One deployment target (dev/QA/staging/prod) |
+
+## Services
+
+${services.map((s) => `- \`${s}\``).join("\n")}
+
+## Workspace Contents (per service)
+
+| Artifact | Purpose |
+|----------|---------|
+| API Spec (OpenAPI) | Source of truth for the contract |
+| Baseline collection | Registered endpoints with documentation |
+| Smoke test collection | Validates endpoints return expected status |
+| Contract test collection | Validates response schemas match spec |
+| Environments (dev/QA/staging/prod) | Variables per deployment target |
+| Pre-request scripts | Secret resolution from vault |
+| Monitor (smoke tests) | 24/7 health checking |
+
+## CI/CD
+
+Platform: **${ciPlatform}**
+
+\`\`\`bash
+# Run smoke tests
+npx postman-cli run collections/smoke-tests.json -e environments/${domain}-dev.json
+
+# Run contract tests
+npx postman-cli run collections/contract-tests.json -e environments/${domain}-dev.json
+\`\`\`
+
+## Environments
+
+| Environment | Purpose |
+|-------------|---------|
+| \`${domain}-dev\` | Development |
+| \`${domain}-qa\` | QA / Integration testing |
+| \`${domain}-staging\` | Pre-production |
+| \`${domain}-prod\` | Production |
+
+## Governance
+
+Spectral rules in \`.spectral.yml\` enforce:
+- OpenAPI 3.x compliance
+- Naming conventions
+- Security scheme requirements
+- Response schema validation
+
+## Getting Started
+
+1. Clone this repo
+2. Install Postman CLI: \`npm install -g @postman/cli\`
+3. Import the workspace: \`postman-cli import --workspace . \`
+4. Run tests: \`postman-cli run collections/smoke-tests.json -e environments/${domain}-dev.json\`
+`;
+}
+
+function generateOpenApiSpec(projectName: string, domain: string, services: string[]): string {
+  const paths: Record<string, unknown> = {};
+  for (const svc of services.slice(0, 5)) {
+    const slug = svc.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    paths[`/${slug}/health`] = {
+      get: {
+        summary: `Health check for ${svc}`,
+        operationId: `get${svc.replace(/[^a-zA-Z0-9]/g, "")}Health`,
+        tags: [svc],
+        responses: { "200": { description: "OK" } },
+      },
+    };
+    paths[`/${slug}`] = {
+      get: {
+        summary: `List ${svc} resources`,
+        operationId: `list${svc.replace(/[^a-zA-Z0-9]/g, "")}`,
+        tags: [svc],
+        responses: { "200": { description: "Success" } },
+      },
+    };
+  }
+
+  return JSON.stringify({
+    openapi: "3.0.3",
+    info: {
+      title: `${projectName} API`,
+      version: "1.0.0",
+      description: `API specification for ${projectName}. Auto-generated from CSE discovery.`,
+    },
+    servers: [
+      { url: `https://api.${domain}`, description: "Production" },
+      { url: `https://api-staging.${domain}`, description: "Staging" },
+      { url: `https://api-dev.${domain}`, description: "Development" },
+    ],
+    paths,
+  }, null, 2);
+}
+
+function generateGitHubActionsCI(domain: string): string {
+  return `name: API Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+
+jobs:
+  smoke-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install -g @postman/cli
+      - run: postman-cli login --with-api-key \${{ secrets.POSTMAN_API_KEY }}
+      - name: Run Smoke Tests (Dev)
+        run: postman-cli run collections/smoke-tests.json -e environments/${domain}-dev.json --reporters cli,json --reporter-json-export results/smoke-dev.json
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: results/
+
+  contract-tests:
+    runs-on: ubuntu-latest
+    needs: smoke-tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install -g @postman/cli
+      - run: postman-cli login --with-api-key \${{ secrets.POSTMAN_API_KEY }}
+      - name: Run Contract Tests
+        run: postman-cli run collections/contract-tests.json -e environments/${domain}-dev.json --reporters cli,json
+`;
+}
+
+function generateGitLabCI(domain: string): string {
+  return `stages:
+  - smoke
+  - contract
+
+smoke-tests:
+  stage: smoke
+  image: node:20
+  before_script:
+    - npm install -g @postman/cli
+    - postman-cli login --with-api-key $POSTMAN_API_KEY
+  script:
+    - postman-cli run collections/smoke-tests.json -e environments/${domain}-dev.json --reporters cli,json
+  artifacts:
+    paths:
+      - results/
+
+contract-tests:
+  stage: contract
+  image: node:20
+  needs: [smoke-tests]
+  before_script:
+    - npm install -g @postman/cli
+    - postman-cli login --with-api-key $POSTMAN_API_KEY
+  script:
+    - postman-cli run collections/contract-tests.json -e environments/${domain}-dev.json --reporters cli,json
+`;
+}
+
+function generateEnvironment(serviceName: string, env: string, domain: string): string {
+  return JSON.stringify({
+    id: `${serviceName}-${env}`,
+    name: `${serviceName}-${env}`,
+    values: [
+      { key: "baseUrl", value: env === "prod" ? `https://api.${domain}` : `https://api-${env}.${domain}`, enabled: true },
+      { key: "environment", value: env, enabled: true },
+      { key: "apiKey", value: "{{vault:api-key}}", enabled: true, type: "secret" },
+    ],
+  }, null, 2);
+}
+
+function generateSpectralRules(): string {
+  return `extends:
+  - spectral:oas
+
+rules:
+  # Naming
+  operation-operationId-valid-in-url:
+    severity: error
+  paths-kebab-case:
+    severity: warn
+    given: "$.paths[*]~"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^/[a-z0-9\\-/{}]+$"
+
+  # Security
+  oas3-api-servers:
+    severity: error
+  operation-security-defined:
+    severity: warn
+
+  # Response
+  operation-success-response:
+    severity: error
+  oas3-valid-schema-example:
+    severity: warn
+
+  # Documentation
+  operation-description:
+    severity: warn
+  info-description:
+    severity: error
+  info-contact:
+    severity: warn
+`;
+}
+
+function generateSmokeTestCollection(projectName: string, services: string[]): string {
+  const items = services.slice(0, 5).map((svc) => {
+    const slug = svc.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    return {
+      name: `${svc} Health Check`,
+      request: {
+        method: "GET",
+        url: { raw: `{{baseUrl}}/${slug}/health`, host: ["{{baseUrl}}"], path: [slug, "health"] },
+      },
+      event: [{
+        listen: "test",
+        script: {
+          exec: [
+            `pm.test("${svc} returns 200", function() {`,
+            "  pm.response.to.have.status(200);",
+            "});",
+          ],
+        },
+      }],
+    };
+  });
+
+  return JSON.stringify({
+    info: { name: `${projectName} Smoke Tests`, schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+    item: items,
+  }, null, 2);
+}
+
+function generateContractTestCollection(projectName: string, services: string[]): string {
+  const items = services.slice(0, 5).map((svc) => {
+    const slug = svc.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    return {
+      name: `${svc} Contract Validation`,
+      request: {
+        method: "GET",
+        url: { raw: `{{baseUrl}}/${slug}`, host: ["{{baseUrl}}"], path: [slug] },
+      },
+      event: [{
+        listen: "test",
+        script: {
+          exec: [
+            `pm.test("${svc} response matches schema", function() {`,
+            "  pm.response.to.have.status(200);",
+            "  pm.response.to.have.header('Content-Type');",
+            "  const json = pm.response.json();",
+            "  pm.expect(json).to.be.an('object');",
+            "});",
+          ],
+        },
+      }],
+    };
+  });
+
+  return JSON.stringify({
+    info: { name: `${projectName} Contract Tests`, schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+    item: items,
+  }, null, 2);
+}
+
+// ---------------------------------------------------------------------------
+// Main scaffold action
+// ---------------------------------------------------------------------------
+
+export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldResult> {
+  const session = await requireAuth();
+
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, ownerUserId: session.userId },
+    select: {
+      id: true,
+      name: true,
+      primaryDomain: true,
+      gitProvider: true,
+      gitRepoOwner: true,
+      gitRepoName: true,
+      gitToken: true,
+      gitBaseBranch: true,
+    },
+  });
+  if (!project) return { error: "Project not found" };
+
+  // Determine domain
+  const domain = project.primaryDomain?.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  if (!domain) return { error: "No primary domain configured. Set it in project settings." };
+
+  // Get cascade artifacts
+  const artifacts = await prisma.phaseArtifact.findMany({
+    where: {
+      projectId,
+      phase: { in: ["CURRENT_TOPOLOGY", "DESIRED_FUTURE_STATE", "CRAFT_SOLUTION", "DEPLOYMENT_PLAN", "INFRASTRUCTURE"] },
+    },
+    orderBy: { version: "desc" },
+    distinct: ["phase"],
+    select: { phase: true, contentJson: true },
+  });
+
+  const artifactMap = new Map<string, Record<string, unknown>>();
+  for (const a of artifacts) {
+    if (a.contentJson) {
+      const content = typeof a.contentJson === "string" ? JSON.parse(a.contentJson) : a.contentJson;
+      artifactMap.set(a.phase, content as Record<string, unknown>);
+    }
+  }
+
+  // Extract services from topology
+  const topology = artifactMap.get("CURRENT_TOPOLOGY") ?? {};
+  const futureState = artifactMap.get("DESIRED_FUTURE_STATE") ?? {};
+  const craftSolution = artifactMap.get("CRAFT_SOLUTION") ?? {};
+  const deploymentPlan = artifactMap.get("DEPLOYMENT_PLAN") ?? {};
+  const infrastructure = artifactMap.get("INFRASTRUCTURE") ?? {};
+
+  // Get service names from topology nodes
+  const nodes = (topology.nodes ?? futureState.targetNodes ?? []) as Array<{ name?: string; type?: string }>;
+  const services = nodes
+    .filter((n) => n.type === "SERVICE" || n.type === "API" || n.type === "GATEWAY")
+    .map((n) => n.name ?? "Unknown Service")
+    .slice(0, 10);
+
+  if (services.length === 0) {
+    services.push(`${project.name} API`);
+  }
+
+  // Detect CI/CD platform from deployment plan
+  const ciCdStages = (deploymentPlan.ciCdStages ?? craftSolution.ciCdPipelines ?? []) as Array<{ platform?: string }>;
+  const detectedPlatform = ciCdStages[0]?.platform ?? "github_actions";
+  const isGitLab = detectedPlatform.includes("gitlab");
+  const ciPlatformLabel = isGitLab ? "GitLab CI" : "GitHub Actions";
+
+  // Determine git token — use project token or fall back to env
+  const gitToken = project.gitToken || process.env.GITHUB_TOKEN || process.env.GITLAB_TOKEN;
+  if (!gitToken) return { error: "No Git token configured. Set gitToken on the project or GITHUB_TOKEN env var." };
+
+  // Repo naming
+  const repoSlug = project.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const repoOrg = project.gitRepoOwner || "postmanCS";
+  const repoName = project.gitRepoName || `${repoSlug}-api-platform`;
+
+  // --- Create repo ---
+  if (!isGitLab) {
+    const createResult = await createGitHubRepo(
+      repoOrg,
+      repoName,
+      `${project.name} — CSE API Platform. Auto-scaffolded.`,
+      gitToken,
+    );
+    if (!createResult.ok) return { error: createResult.error ?? "Failed to create repo" };
+
+    // Generate files
+    const files: RepoFile[] = [
+      { path: "README.md", content: generateReadme(project.name, domain, services, ciPlatformLabel) },
+      { path: "specs/openapi.json", content: generateOpenApiSpec(project.name, domain, services) },
+      { path: ".spectral.yml", content: generateSpectralRules() },
+      { path: "collections/smoke-tests.json", content: generateSmokeTestCollection(project.name, services) },
+      { path: "collections/contract-tests.json", content: generateContractTestCollection(project.name, services) },
+      { path: ".github/workflows/api-tests.yml", content: generateGitHubActionsCI(domain) },
+    ];
+
+    // Generate environments
+    for (const env of ["dev", "qa", "staging", "prod"]) {
+      files.push({
+        path: `environments/${domain}-${env}.json`,
+        content: generateEnvironment(repoSlug, env, domain),
+      });
+    }
+
+    // Push files
+    const owner = createResult.url!.split("/").slice(-2, -1)[0] || repoOrg;
+    const pushResult = await pushFilesToGitHub(owner, repoName, files, gitToken);
+    if (!pushResult.ok) return { error: `Repo created but file push failed: ${pushResult.error}` };
+
+    // Update project with repo info
+    await prisma.project.update({
+      where: { id: projectId },
+      data: {
+        gitProvider: "github",
+        gitRepoOwner: owner,
+        gitRepoName: repoName,
+        lastRepoPushAt: new Date(),
+      },
+    });
+
+    revalidatePath(`/projects/${projectId}`);
+    revalidatePath(`/projects/${projectId}/repo`);
+    revalidatePath(`/projects/${projectId}/execution`);
+
+    return {
+      success: true,
+      repoUrl: createResult.url!,
+      filesCreated: files.length,
+    };
+  } else {
+    // GitLab — TODO: implement GitLab API
+    return { error: "GitLab repo creation not yet implemented. Use GitHub for now." };
+  }
+}

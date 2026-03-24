@@ -3,6 +3,7 @@ import { getProject } from "@/lib/actions/projects";
 import { requireAuth } from "@/lib/session";
 import { notFound } from "next/navigation";
 import { ExecutionClient } from "./ExecutionClient";
+import { ScaffoldRepoButton } from "./ScaffoldRepoButton";
 
 export default async function ExecutionPage({
   params,
@@ -56,6 +57,15 @@ export default async function ExecutionPage({
             <StatusBadge status={artifact.status} />
           )}
         </div>
+      </div>
+
+      {/* Scaffold Repo Button */}
+      <div className="mb-6">
+        <ScaffoldRepoButton
+          projectId={projectId}
+          hasArtifact={!!artifact}
+          existingRepoUrl={project.gitRepoName ? `https://github.com/${project.gitRepoOwner}/${project.gitRepoName}` : undefined}
+        />
       </div>
 
       {!artifact ? (
