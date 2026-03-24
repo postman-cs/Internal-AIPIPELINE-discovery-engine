@@ -226,6 +226,19 @@ export interface RoutingDecision {
  * 3. Check provider availability (skip if API key missing)
  * 4. Use task category mapping to pick the best available model
  */
+// Agents that generate large JSON output (topology graphs, infrastructure, collections)
+// and need a model with >8K max output tokens. These use Sonnet even when the
+// global default is Haiku.
+const LONG_OUTPUT_AGENTS = new Set([
+  "CurrentTopologyBuilder",
+  "FutureStateDesigner",
+  "SolutionDesigner",
+  "InfrastructurePlanner",
+  "CraftSolution",
+  "TestSolution",
+  "BuildLogGenerator",
+]);
+
 export function selectModel(agentType: string): RoutingDecision {
   // 1. Per-agent override: AI_MODEL_ReconSynthesizer=gpt-4.1
   const agentOverrideKey = `AI_MODEL_${agentType.replace(/[^a-zA-Z0-9]/g, "_")}`;
@@ -238,11 +251,25 @@ export function selectModel(agentType: string): RoutingDecision {
     };
   }
 
-  // 2. Global override: AI_DEFAULT_MODEL=claude-sonnet-4-20250514
+  // 2. Global override: AI_DEFAULT_MODEL
   const globalOverride = process.env.AI_DEFAULT_MODEL;
   if (globalOverride && MODELS[globalOverride]) {
+    const globalModel = MODELS[globalOverride];
+
+    // Force Sonnet for long-output agents when default is Haiku (8K limit)
+    if (LONG_OUTPUT_AGENTS.has(agentType) && globalModel.maxOutputTokens < 12_000) {
+      const sonnet = MODELS["claude-sonnet-4-20250514"];
+      if (sonnet) {
+        return {
+          model: sonnet,
+          reason: `Long-output agent "${agentType}" needs >8K tokens — using Sonnet`,
+          fallback: globalModel, // fall back to the global default
+        };
+      }
+    }
+
     return {
-      model: MODELS[globalOverride],
+      model: globalModel,
       reason: `Global override: AI_DEFAULT_MODEL=${globalOverride}`,
       fallback: null,
     };
