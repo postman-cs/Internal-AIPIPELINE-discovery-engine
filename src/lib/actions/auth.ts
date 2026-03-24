@@ -48,6 +48,51 @@ export async function loginAction(_prev: unknown, formData: FormData) {
   redirect(user.role === "ADMIRAL" || user.role === "ADMIN" || user.isAdmin ? "/admiral" : "/dashboard");
 }
 
+export async function signupAction(_prev: unknown, formData: FormData) {
+  const name = formData.get("name") as string;
+  const email = formData.get("email") as string;
+  const password = formData.get("password") as string;
+  const confirmPassword = formData.get("confirmPassword") as string;
+
+  if (!name || !email || !password) {
+    return { error: "All fields are required" };
+  }
+
+  if (password !== confirmPassword) {
+    return { error: "Passwords do not match" };
+  }
+
+  if (password.length < 8) {
+    return { error: "Password must be at least 8 characters" };
+  }
+
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) {
+    return { error: "An account with this email already exists" };
+  }
+
+  const passwordHash = await bcrypt.hash(password, 12);
+  const user = await prisma.user.create({
+    data: { name, email, passwordHash },
+  });
+
+  const session = await getSession();
+  session.userId = user.id;
+  session.email = user.email;
+  session.name = user.name;
+  session.isAdmin = false;
+  session.role = user.role;
+  await session.save();
+
+  logAudit({
+    userId: user.id,
+    action: "LOGIN",
+    metadata: { email: user.email, via: "signup" },
+  }).catch(() => {});
+
+  redirect("/dashboard");
+}
+
 export async function logoutAction() {
   const session = await getSession();
   const userId = session.userId;

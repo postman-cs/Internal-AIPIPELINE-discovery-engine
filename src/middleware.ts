@@ -16,6 +16,7 @@ const PUBLIC_EXACT_PATHS = new Set([
   "/api/webhooks/newman-results",
   "/api/webhooks/evidence",
   "/api/webhooks/jira",
+  "/api/webhooks/architect-ingest",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -116,9 +117,8 @@ function addSecurityHeaders(response: NextResponse, nonce?: string): NextRespons
   );
 
   let scriptSrc: string;
-  if (process.env.NODE_ENV === "production" && nonce) {
-    scriptSrc = `script-src 'self' 'nonce-${nonce}'`;
-    response.headers.set("x-csp-nonce", nonce);
+  if (process.env.NODE_ENV === "production") {
+    scriptSrc = "script-src 'self' 'unsafe-inline'";
   } else {
     scriptSrc = "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
   }

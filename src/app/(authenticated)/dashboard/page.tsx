@@ -49,7 +49,10 @@ export default async function DashboardPage() {
 
   const [recentProjects, latestRun, cachedStats, xpData] = await Promise.all([
     prisma.project.findMany({
-      where: { ownerUserId: userId },
+      where: {
+        ownerUserId: userId,
+        engagementStage: { gte: 2 },
+      },
       orderBy: [{ isPinned: "desc" }, { updatedAt: "desc" }],
       include: {
         discoveryArtifacts: { orderBy: { version: "desc" }, take: 1 },

@@ -219,6 +219,19 @@ export function ArchitectClient({ projects }: Props) {
       await navigator.clipboard.writeText(url);
       setShareCopied(true);
       setTimeout(() => setShareCopied(false), 3000);
+
+      const subject = encodeURIComponent(`Architecture Discovery – ${companyName || "Your Organization"}`);
+      const body = encodeURIComponent(
+        `Hi,\n\n` +
+        `As part of our engagement, I'd like to get a clearer picture of your current API infrastructure and services. ` +
+        `I've put together a short form to capture the key details — it should only take a few minutes.\n\n` +
+        `Please fill it out here:\n${url}\n\n` +
+        `This is a secure, one-time link specific to our project together. ` +
+        `No login required — just fill in what you can and hit submit.\n\n` +
+        `Let me know if you have any questions!\n\n` +
+        `Best regards`
+      );
+      window.open(`mailto:?subject=${subject}&body=${body}`, "_self");
     }
   };
 
