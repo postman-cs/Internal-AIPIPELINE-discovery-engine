@@ -86,13 +86,27 @@ export async function ingestDocument(
   });
 
   if (existing) {
-    return {
-      documentId: existing.id,
-      chunkCount: 0,
-      evidenceLabels: [],
-      skipped: true,
-      skipReason: `Duplicate content (hash: ${contentHash.slice(0, 12)}...)`,
-    };
+    // Verify the existing document actually has chunks.
+    // If a prior attempt failed after creating the SourceDocument but before
+    // embedding/chunking completed, the document is orphaned — delete it and
+    // re-process instead of silently skipping.
+    const existingChunkCount = await prisma.documentChunk.count({
+      where: { documentId: existing.id },
+    });
+
+    if (existingChunkCount > 0) {
+      return {
+        documentId: existing.id,
+        chunkCount: 0,
+        evidenceLabels: [],
+        skipped: true,
+        skipReason: `Duplicate content (hash: ${contentHash.slice(0, 12)}...)`,
+      };
+    }
+
+    // Orphaned document — remove it so we can re-ingest
+    console.info("[ingest] Deleting orphaned SourceDocument (0 chunks):", existing.id);
+    await prisma.sourceDocument.delete({ where: { id: existing.id } });
   }
 
   // 3. Store raw document with hash
@@ -111,11 +125,29 @@ export async function ingestDocument(
   // 4. Chunk text
   const chunks = chunkText(rawText);
   if (chunks.length === 0) {
+    console.warn("[ingest] chunkText returned 0 chunks for non-empty text", {
+      docId: doc.id,
+      rawTextLength: rawText.length,
+      rawTextPreview: rawText.slice(0, 100),
+    });
     return { documentId: doc.id, chunkCount: 0, evidenceLabels: [], skipped: false };
   }
 
   // 5. Generate embeddings (batch)
-  const embeddings = await generateEmbeddings(chunks.map((c) => c.content));
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error(
+      "OPENAI_API_KEY is not set. Embeddings require an OpenAI API key — add it to your .env.local file."
+    );
+  }
+
+  let embeddings: number[][];
+  try {
+    embeddings = await generateEmbeddings(chunks.map((c) => c.content));
+  } catch (embeddingError) {
+    // Clean up the just-created SourceDocument so it doesn't become orphaned
+    await prisma.sourceDocument.delete({ where: { id: doc.id } }).catch(() => {});
+    throw embeddingError;
+  }
 
   // 6. Assign evidence labels
   let nextEvNum = await getNextEvidenceNumber(projectId);

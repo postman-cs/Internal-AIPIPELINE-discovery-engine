@@ -71,9 +71,13 @@ export function AIPipelinePanel({ projectId, evidenceStats, hasArtifact, latestV
         ingestTitle.trim() || `${ingestSource} document`,
         ingestContent
       );
+      console.log("[ingest] server action result:", JSON.stringify(result));
       if (result.error) {
         setIngestMsg({ type: "error", text: result.error });
         toast.error("Ingest failed", result.error);
+      } else if (result.skipped) {
+        setIngestMsg({ type: "error", text: "This content has already been ingested. The evidence chunks already exist for this project." });
+        toast.warning("Duplicate content", "This document was already ingested — existing evidence chunks are unchanged.");
       } else {
         const cascadeNote = result.impactedPhases?.length
           ? ` ${result.impactedPhases.length} phases impacted.`

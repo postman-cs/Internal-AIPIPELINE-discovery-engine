@@ -24,6 +24,8 @@ enum Phase {
   CRAFT_SOLUTION
   TEST_SOLUTION
   DEPLOYMENT_PLAN
+  MONITORING        // legacy — retained for DB compatibility
+  ITERATION         // legacy — retained for DB compatibility
   MEETINGS
   WORKING_SESSIONS
   BUILD_LOG
@@ -87,7 +89,9 @@ model User {
   passwordHash        String
   role                UserRole             @default(CSE)
   isAdmin             Boolean              @default(false)
+  googleAccessToken   String?
   googleRefreshToken  String?
+  googleTokenExpiry   DateTime?
   googleEmail         String?
   jiraBaseUrl         String?
   jiraEmail           String?

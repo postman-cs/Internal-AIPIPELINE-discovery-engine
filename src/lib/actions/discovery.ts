@@ -234,6 +234,19 @@ export async function ingestDiscoveryDocument(
       rawText: rawText.trim(),
     });
 
+    // Surface dedup skips so the UI can show a meaningful message
+    if (result.skipped) {
+      revalidatePath(`/projects/${projectId}/discovery`);
+      return {
+        success: true,
+        documentId: result.documentId,
+        chunkCount: 0,
+        evidenceLabels: [],
+        skipped: true,
+        skipReason: result.skipReason,
+      };
+    }
+
     // --- Cascade: Create EvidenceSnapshot + Impact Analysis ---
     let snapshotId: string | null = null;
     let impactedPhases: string[] = [];
