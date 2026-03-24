@@ -22,7 +22,7 @@ import { getPhaseNode, getDependencies, getTopologicalTiers } from "./phases";
 import { generatePatch, generateDiffSummary } from "./patch";
 import type { Prisma } from "@prisma/client";
 import { persistPhaseAssumptions, isPhaseGateClear, autoVerifyAssumptions } from "@/lib/assumptions/engine";
-import { persistDetectedBlockers } from "@/lib/blockers/engine";
+// Blockers are decoupled from cascade — see /blockers page for project-level blocker analysis
 import { pluginRegistry } from "@/lib/ai/plugins";
 import { applyProposal } from "@/lib/actions/cascade";
 import type { AssumptionItem, BlockerDetection } from "@/lib/ai/agents/topologyTypes";
@@ -464,6 +464,31 @@ async function processSingleTask(
       }
     }
 
+    // --- Skip already-CLEAN phases with matching snapshot ---
+    // If this phase already has a CLEAN artifact built from the same evidence
+    // snapshot, skip the AI call entirely — no work to do.
+    const currentArtifact = await prisma.phaseArtifact.findFirst({
+      where: { projectId: job.projectId, phase },
+      orderBy: { version: "desc" },
+      select: { status: true, snapshotId: true },
+    });
+    if (
+      currentArtifact &&
+      (currentArtifact.status === "CLEAN" || currentArtifact.status === "CLEAN_WITH_EXCEPTIONS") &&
+      currentArtifact.snapshotId === snapshotId
+    ) {
+      await prisma.recomputeTask.update({
+        where: { id: task.id },
+        data: {
+          status: "COMPLETED",
+          message: "Already CLEAN with same snapshot — skipped",
+          finishedAt: new Date(),
+        },
+      });
+      console.info(`[cascade] ${phase}: already CLEAN with matching snapshot, skipped`);
+      return { phase, status: "completed", assumptionIds: [], blockerIds: [] };
+    }
+
     // --- Point 9: cascade result caching -----------------------------------
     const upstreamVersions: Record<string, number> = {};
     for (const dep of deps) {
@@ -515,15 +540,11 @@ async function processSingleTask(
       } catch { /* non-fatal: auto-verification is best-effort */ }
     }
 
-    let blockerIds: string[] = [];
-    if (agentResult.detectedBlockers.length > 0) {
-      blockerIds = await persistDetectedBlockers(
-        job.projectId,
-        agentResult.detectedBlockers,
-        phase,
-        `${phase}-agent`
-      );
-    }
+    // Blockers are decoupled from the cascade — they are a separate project-level
+    // module. Agent-detected blockers are stored in the proposal's contentJson
+    // for later extraction by the blocker analysis module, but they do NOT
+    // slow down the cascade with extra AI calls (nuke design, etc).
+    const blockerIds: string[] = [];
 
     const proposalId = await createProposal(
       task.id,
