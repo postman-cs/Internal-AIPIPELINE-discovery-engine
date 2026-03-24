@@ -34,8 +34,8 @@ export async function POST(
     // Impact analysis
     const impact = await runImpactAnalysis(projectId, snapshot.snapshotId, "MANUAL");
 
-    // Execute recompute
-    const result = await executeRecomputeJob(impact.jobId);
+    // Execute recompute — autoAccept so phases become CLEAN and downstream can proceed
+    const result = await executeRecomputeJob(impact.jobId, { autoAccept: true });
 
     return Response.json({
       success: true,

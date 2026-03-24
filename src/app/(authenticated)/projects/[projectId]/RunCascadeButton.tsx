@@ -1,22 +1,32 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { triggerCascadeUpdate } from "@/lib/actions/cascade";
 
 export function RunCascadeButton({ projectId }: { projectId: string }) {
-  const [isPending, startTransition] = useTransition();
+  const [isPending, setIsPending] = useState(false);
   const router = useRouter();
 
-  const handleRun = () => {
-    startTransition(async () => {
-      const result = await triggerCascadeUpdate(projectId);
-      if (result && "error" in result) {
+  const handleRun = async () => {
+    setIsPending(true);
+    try {
+      // Call the API route directly — it runs inline with maxDuration=800s
+      // The server action fire-and-forgets which gets killed on Vercel serverless
+      const res = await fetch(`/api/projects/${projectId}/cascade/recompute`, {
+        method: "POST",
+      });
+      const result = await res.json();
+      if (result.error) {
         alert(result.error);
         return;
       }
       router.push(`/projects/${projectId}/updates`);
-    });
+      router.refresh();
+    } catch (err) {
+      alert(`Cascade failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsPending(false);
+    }
   };
 
   return (
