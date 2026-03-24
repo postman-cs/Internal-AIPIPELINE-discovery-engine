@@ -191,8 +191,11 @@ async function provisionPostmanWorkspace(
     },
   });
 
+  let smokeCollectionUid: string | undefined;
   if (smokeRes.ok) {
-    smokeCollectionId = (smokeRes.data.collection as Record<string, unknown>)?.id as string;
+    const col = smokeRes.data.collection as Record<string, unknown>;
+    smokeCollectionId = col?.id as string;
+    smokeCollectionUid = col?.uid as string;
   } else {
     errors.push(`Smoke collection: ${JSON.stringify(smokeRes.data)}`);
   }
@@ -252,6 +255,7 @@ async function provisionPostmanWorkspace(
 
   // ── 6. Create environments (dev/QA/staging/prod) ─────────────────────
   const environmentIds: string[] = [];
+  const environmentUids: string[] = [];
   for (const env of ["dev", "qa", "staging", "prod"]) {
     const baseUrl = env === "prod" ? `https://api.${domain}` : `https://api-${env}.${domain}`;
     const envRes = await postmanApi("/environments", token, {
@@ -270,8 +274,11 @@ async function provisionPostmanWorkspace(
       },
     });
     if (envRes.ok) {
-      const envId = (envRes.data.environment as Record<string, unknown>)?.id as string;
+      const envData = envRes.data.environment as Record<string, unknown>;
+      const envId = envData?.id as string;
+      const envUid = envData?.uid as string;
       if (envId) environmentIds.push(envId);
+      if (envUid) environmentUids.push(envUid);
     } else {
       errors.push(`Environment ${env}: ${JSON.stringify(envRes.data)}`);
     }
@@ -279,14 +286,14 @@ async function provisionPostmanWorkspace(
 
   // ── 7. Configure monitor on smoke tests ──────────────────────────────
   let monitorId: string | undefined;
-  if (smokeCollectionId && environmentIds.length > 0) {
+  if (smokeCollectionUid && environmentUids.length > 0) {
     const monRes = await postmanApi("/monitors", token, {
       method: "POST",
       body: {
         monitor: {
           name: `${slug}-smoke-monitor`,
-          collection: smokeCollectionId,
-          environment: environmentIds[0], // dev environment
+          collection: smokeCollectionUid,
+          environment: environmentUids[0], // dev environment
           schedule: { cron: "0 */6 * * *", timezone: "America/Chicago" }, // every 6 hours
         },
       },
