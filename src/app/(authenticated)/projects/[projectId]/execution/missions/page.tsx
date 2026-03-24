@@ -1,9 +1,7 @@
-import { prisma } from "@/lib/prisma";
 import { getProject } from "@/lib/actions/projects";
 import { requireAuth } from "@/lib/session";
 import { notFound } from "next/navigation";
 import { getMissionData } from "@/lib/actions/meetings";
-import { MoonBaseWrapper } from "../MoonBaseWrapper";
 import { TranscriptUploader } from "../TranscriptUploader";
 
 export default async function MissionsPage({
@@ -11,7 +9,7 @@ export default async function MissionsPage({
 }: {
   params: Promise<{ projectId: string }>;
 }) {
-  const session = await requireAuth();
+  await requireAuth();
   const { projectId } = await params;
   const project = await getProject(projectId);
   if (!project) notFound();
@@ -19,70 +17,42 @@ export default async function MissionsPage({
   const data = await getMissionData(projectId);
   if (!data) notFound();
 
-  const meetingEntries = data.meetings.entries.map((e) => ({
-    id: e.id,
-    title: e.title,
-    type: "meeting" as const,
-    date: e.date,
-  }));
+  const allEntries = [...data.meetings.entries, ...data.sessions.entries]
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  const sessionEntries = data.sessions.entries.map((e) => ({
-    id: e.id,
-    title: e.title,
-    type: "working_session" as const,
-    date: e.date,
-  }));
-
-  const totalMissions = meetingEntries.length + sessionEntries.length;
+  const meetingCount = data.meetings.entries.length;
+  const sessionCount = data.sessions.entries.length;
+  const totalCount = meetingCount + sessionCount;
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 page-animate">
       {/* Header */}
-      <div className="mb-8">
-        <div className="flex items-center gap-3 mb-2">
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center"
-            style={{
-              background: "linear-gradient(135deg, rgba(59,130,246,0.15), rgba(168,85,247,0.15))",
-              border: "1px solid rgba(255,255,255,0.06)",
-            }}
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="var(--foreground)" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-            </svg>
-          </div>
-          <div>
-            <h1 className="text-xl font-bold" style={{ color: "var(--foreground)" }}>
-              Missions
-            </h1>
-            <p className="text-xs" style={{ color: "var(--foreground-dim)" }}>
-              Meetings & working sessions for {project.name}
-            </p>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <MissionBadge
-              label="Meetings"
-              count={meetingEntries.length}
-              color="#3b82f6"
-              status={data.meetings.status}
-            />
-            <MissionBadge
-              label="Sessions"
-              count={sessionEntries.length}
-              color="#a855f7"
-              status={data.sessions.status}
-            />
-          </div>
+      <div className="mb-8 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold" style={{ color: "var(--foreground)" }}>
+            Engagement Log
+          </h1>
+          <p className="text-sm mt-1" style={{ color: "var(--foreground-dim)" }}>
+            Meetings and working sessions for {project.name}
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <StatusPill label="Meetings" count={meetingCount} color="#6366f1" status={data.meetings.status} />
+          <StatusPill label="Sessions" count={sessionCount} color="#8b5cf6" status={data.sessions.status} />
         </div>
       </div>
 
-      {/* Moon Base Animation */}
-      <div className="mb-8">
-        <MoonBaseWrapper
-          meetings={meetingEntries}
-          sessions={sessionEntries}
-          projectName={data.projectName}
-        />
+      {/* Stats */}
+      <div
+        className="grid grid-cols-3 gap-4 mb-8 rounded-xl p-5"
+        style={{
+          background: "linear-gradient(135deg, rgba(6,10,20,0.9), rgba(15,23,42,0.95))",
+          border: "1px solid rgba(99,102,241,0.15)",
+        }}
+      >
+        <StatBlock value={totalCount} label="Total Engagements" />
+        <StatBlock value={meetingCount} label="Customer Meetings" />
+        <StatBlock value={sessionCount} label="Working Sessions" />
       </div>
 
       {/* Transcript Uploader */}
@@ -90,78 +60,122 @@ export default async function MissionsPage({
         <TranscriptUploader projectId={projectId} />
       </div>
 
-      {/* Mission Log */}
-      {totalMissions > 0 && (
+      {/* Engagement Timeline */}
+      {totalCount > 0 && (
         <div
           className="rounded-xl overflow-hidden"
-          style={{ border: "1px solid rgba(255,255,255,0.04)" }}
+          style={{ border: "1px solid rgba(255,255,255,0.06)" }}
         >
           <div
-            className="px-5 py-3"
-            style={{ background: "rgba(255,255,255,0.02)", borderBottom: "1px solid rgba(255,255,255,0.04)" }}
+            className="px-5 py-3 flex items-center justify-between"
+            style={{ background: "rgba(255,255,255,0.02)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}
           >
-            <h3 className="text-xs font-semibold" style={{ color: "var(--foreground-muted)" }}>
-              Mission Log ({totalMissions})
+            <h3 className="text-xs font-semibold tracking-wide" style={{ color: "var(--foreground-muted)" }}>
+              TIMELINE
             </h3>
+            <span className="text-[10px]" style={{ color: "var(--foreground-dim)" }}>
+              {totalCount} {totalCount === 1 ? "entry" : "entries"}
+            </span>
           </div>
-          <div className="divide-y" style={{ borderColor: "rgba(255,255,255,0.03)" }}>
-            {[...data.meetings.entries, ...data.sessions.entries]
-              .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-              .map((entry) => {
-                const isMeeting = entry.type === "meeting";
-                const color = isMeeting ? "#3b82f6" : "#a855f7";
-                return (
-                  <div key={entry.id} className="px-5 py-3 flex items-center gap-3">
+          <div className="divide-y" style={{ borderColor: "rgba(255,255,255,0.04)" }}>
+            {allEntries.map((entry) => {
+              const isMeeting = entry.type === "meeting";
+              const color = isMeeting ? "#6366f1" : "#8b5cf6";
+              return (
+                <div key={entry.id} className="px-5 py-4 flex items-center gap-4 hover:bg-white/[0.01] transition-colors">
+                  {/* Timeline dot */}
+                  <div className="flex flex-col items-center gap-1">
                     <div
-                      className="w-6 h-6 rounded-md flex items-center justify-center shrink-0"
-                      style={{ background: `${color}15`, color }}
-                    >
-                      {isMeeting ? (
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
-                        </svg>
-                      ) : (
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
-                        </svg>
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium truncate" style={{ color: "var(--foreground)" }}>{entry.title}</p>
-                      <p className="text-[10px]" style={{ color: "var(--foreground-dim)" }}>
-                        {entry.date} {entry.attendees && `· ${entry.attendees}`}
-                      </p>
-                    </div>
-                    <span
-                      className="text-[9px] px-2 py-0.5 rounded-full font-semibold shrink-0"
-                      style={{ background: `${color}12`, color }}
-                    >
-                      {isMeeting ? "MTG" : "WRK"} · {entry.chunkCount} chunks
-                    </span>
-                    <span className="text-[9px] font-bold shrink-0" style={{ color: "#fbbf24" }}>+50 XP</span>
+                      className="w-2.5 h-2.5 rounded-full"
+                      style={{ background: color, boxShadow: `0 0 8px ${color}40` }}
+                    />
                   </div>
-                );
-              })}
+
+                  {/* Icon */}
+                  <div
+                    className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                    style={{ background: `${color}10` }}
+                  >
+                    {isMeeting ? (
+                      <svg className="w-4 h-4" style={{ color }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" style={{ color }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
+                      </svg>
+                    )}
+                  </div>
+
+                  {/* Content */}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium truncate" style={{ color: "var(--foreground)" }}>
+                      {entry.title}
+                    </p>
+                    <p className="text-xs mt-0.5" style={{ color: "var(--foreground-dim)" }}>
+                      {entry.date}
+                      {entry.attendees && ` · ${entry.attendees}`}
+                    </p>
+                  </div>
+
+                  {/* Meta */}
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span
+                      className="text-[10px] px-2.5 py-1 rounded-md font-medium"
+                      style={{ background: `${color}10`, color, border: `1px solid ${color}20` }}
+                    >
+                      {isMeeting ? "Meeting" : "Working Session"}
+                    </span>
+                    <span className="text-[10px] tabular-nums" style={{ color: "var(--foreground-dim)" }}>
+                      {entry.chunkCount} evidence chunks
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
+        </div>
+      )}
+
+      {totalCount === 0 && (
+        <div
+          className="rounded-xl p-12 text-center"
+          style={{ background: "rgba(255,255,255,0.01)", border: "1px solid rgba(255,255,255,0.06)" }}
+        >
+          <p className="text-sm" style={{ color: "var(--foreground-dim)" }}>
+            No meetings or working sessions recorded yet.
+          </p>
+          <p className="text-xs mt-1" style={{ color: "var(--foreground-dim)" }}>
+            Upload a call transcript above to get started.
+          </p>
         </div>
       )}
     </div>
   );
 }
 
-function MissionBadge({ label, count, color, status }: { label: string; count: number; color: string; status: string }) {
+function StatusPill({ label, count, color, status }: { label: string; count: number; color: string; status: string }) {
   return (
     <div
-      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
-      style={{ background: `${color}10`, border: `1px solid ${color}20` }}
+      className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
+      style={{ background: `${color}08`, border: `1px solid ${color}15` }}
     >
-      <span className="text-[10px] font-bold" style={{ color }}>{count}</span>
-      <span className="text-[9px] font-medium" style={{ color: `${color}aa` }}>{label}</span>
+      <span className="text-xs font-semibold tabular-nums" style={{ color }}>{count}</span>
+      <span className="text-[10px]" style={{ color: "var(--foreground-dim)" }}>{label}</span>
       {status === "CLEAN" && (
-        <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke={color} strokeWidth={3}>
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke={color} strokeWidth={2.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
         </svg>
       )}
+    </div>
+  );
+}
+
+function StatBlock({ value, label }: { value: number; label: string }) {
+  return (
+    <div className="text-center">
+      <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--foreground)" }}>{value}</p>
+      <p className="text-[10px] mt-1" style={{ color: "var(--foreground-dim)" }}>{label}</p>
     </div>
   );
 }
