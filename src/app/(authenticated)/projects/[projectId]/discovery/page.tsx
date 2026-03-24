@@ -123,7 +123,6 @@ export default async function DiscoveryPage({
             { label: "Service Template", done: !!serviceTemplate?.serviceTemplateContent, color: "#a78bfa", count: null },
             { label: "CortexLab", done: !!artifact?.aiGenerated, color: "#06d6d6", count: recentRuns.filter((r) => r.status === "SUCCESS").length },
             { label: "Discovery Brief", done: !!artifact, color: "#34d399", count: artifact?.version ?? 0 },
-            { label: "Assumptions", done: assumptionCount === 0 && !!artifact, color: assumptionCount > 0 ? "#fbbf24" : "#34d399", count: assumptionCount },
             { label: "Cascade", done: hasCascadeRun, color: hasCascadeRun ? "#3b82f6" : cascadeReady ? "#60a5fa" : "var(--foreground-dim)", count: cascadePhases.length > 0 ? cascadePhases.length : null },
           ].map((step, i, arr) => (
             <div key={step.label} className="flex items-center shrink-0">
@@ -155,23 +154,6 @@ export default async function DiscoveryPage({
         </div>
       </div>
 
-      {/* Assumption checkpoint alert */}
-      {assumptionCount > 0 && (
-        <Link
-          href={`/projects/${projectId}/assumptions`}
-          className="flex items-center gap-3 rounded-xl p-3 mb-6 transition-all duration-200 group"
-          style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)" }}
-        >
-          <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: "rgba(245,158,11,0.15)", color: "#fbbf24" }}>
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-          </div>
-          <div className="flex-1">
-            <p className="text-sm font-medium" style={{ color: "#fbbf24" }}>{assumptionCount} assumption{assumptionCount !== 1 ? "s" : ""} need verification</p>
-            <p className="text-[11px]" style={{ color: "var(--foreground-dim)" }}>Review AI assumptions to keep the cascade on the golden path</p>
-          </div>
-          <span className="text-xs group-hover:translate-x-0.5 transition-transform" style={{ color: "#fbbf24" }}>&rarr;</span>
-        </Link>
-      )}
 
       {/* Black Hole — Evidence Singularity */}
       <div className="mb-6">
