@@ -277,40 +277,11 @@ export async function runAgent<T>(
       total: response.usage.totalTokens,
     };
 
-    // ── Multi-turn correction on Zod failure ──────────────────────────────
-    let correctionTurn = 0;
-    while (!parseResult.success && correctionTurn < 3) {
-      correctionTurn++;
-      const errorList = parseResult.errors?.join("\n- ") ?? "Unknown validation error";
-      const correctionPrompt = `Your previous JSON response failed schema validation. Fix these issues and return corrected valid JSON:\n- ${errorList}`;
-      messageHistory.push({ role: "user", content: correctionPrompt });
-
-      const correctionResponse = await completeWithFallback(
-        { model: modelSpec, systemPrompt: enhancedSystemPrompt, userPrompt: correctionPrompt, temperature: 0.1, jsonMode: true },
-        fallbackSpec,
-      );
-      messageHistory.push({ role: "assistant", content: correctionResponse.content.slice(0, 2000) + "..." });
-
-      tokenUsage.prompt += correctionResponse.usage.promptTokens;
-      tokenUsage.completion += correctionResponse.usage.completionTokens;
-      tokenUsage.total += correctionResponse.usage.totalTokens;
-
-      let correctedObj: Record<string, unknown>;
-      try {
-        correctedObj = JSON.parse(correctionResponse.content) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
-      delete correctedObj.assumptions;
-      delete correctedObj.detectedBlockers;
-
-      parseResult = resilientZodParse(outputSchema, correctedObj, agentType);
-      zodAttempts += parseResult.attempts;
-    }
-
+    // No multi-turn correction — resilientZodParse already tries unwrapping
+    // and passthrough strategies. Retries waste 3-6 minutes on full LLM calls.
     if (!parseResult.success) {
       throw new Error(
-        `${agentType}: Zod validation failed after ${correctionTurn + 1} turn(s) — ${parseResult.errors?.join("; ")}`,
+        `${agentType}: Zod validation failed — ${parseResult.errors?.join("; ")}`,
       );
     }
 
