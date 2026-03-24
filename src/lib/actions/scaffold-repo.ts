@@ -49,6 +49,7 @@ async function postmanApi(
     headers: {
       "X-Api-Key": token,
       "Content-Type": "application/json",
+      "Accept": "application/vnd.api.v10+json",
     },
     body: options?.body ? JSON.stringify(options.body) : undefined,
   });
@@ -94,9 +95,10 @@ async function provisionPostmanWorkspace(
   const workspaceId = (wsRes.data.workspace as Record<string, unknown>)?.id as string;
   const workspaceUrl = `https://go.postman.co/workspace/${workspaceId}`;
 
-  // 2. Create API (pushes spec to Spec Hub)
+  // 2. Create API in the workspace (pushes spec to Spec Hub)
+  const collectionIds: string[] = [];
   let apiId: string | undefined;
-  const apiRes = await postmanApi("/apis", token, {
+  const apiRes = await postmanApi(`/apis?workspaceId=${workspaceId}`, token, {
     method: "POST",
     body: {
       name: `${projectName} API`,
@@ -106,37 +108,36 @@ async function provisionPostmanWorkspace(
   });
 
   if (apiRes.ok) {
-    apiId = (apiRes.data.api as Record<string, unknown>)?.id as string;
+    apiId = (apiRes.data as Record<string, unknown>)?.id as string
+      ?? (apiRes.data.api as Record<string, unknown>)?.id as string;
 
-    // 2b. Create schema version (push YAML spec to Spec Hub)
-    const schemaRes = await postmanApi(`/apis/${apiId}/schemas`, token, {
-      method: "POST",
-      body: {
-        type: "openapi:3_0",
-        language: "yaml",
-        schema: specYaml,
-      },
-    });
-    if (!schemaRes.ok) {
-      errors.push(`Schema push failed: ${JSON.stringify(schemaRes.data)}`);
+    if (apiId) {
+      // 2b. Create schema version (push YAML spec to Spec Hub)
+      const schemaRes = await postmanApi(`/apis/${apiId}/schemas`, token, {
+        method: "POST",
+        body: {
+          type: "openapi:3_0",
+          language: "yaml",
+          schema: specYaml,
+        },
+      });
+      if (!schemaRes.ok) {
+        errors.push(`Schema push failed: ${JSON.stringify(schemaRes.data)}`);
+      }
+
+      // 3. Generate collection from API (derives from spec)
+      const genRes = await postmanApi(`/apis/${apiId}/collections`, token, {
+        method: "POST",
+        body: {},
+      });
+      if (genRes.ok) {
+        const colId = (genRes.data as Record<string, unknown>)?.id as string
+          ?? (genRes.data.collection as Record<string, unknown>)?.id as string;
+        if (colId) collectionIds.push(colId);
+      }
     }
   } else {
     errors.push(`API creation failed: ${JSON.stringify(apiRes.data)}`);
-  }
-
-  // 3. Generate collection from API (derives from spec)
-  const collectionIds: string[] = [];
-  if (apiId) {
-    const genRes = await postmanApi(`/apis/${apiId}/collections`, token, {
-      method: "POST",
-      body: { name: `${projectName} — Baseline Collection` },
-    });
-    if (genRes.ok) {
-      const colId = (genRes.data.collection as Record<string, unknown>)?.id as string;
-      if (colId) collectionIds.push(colId);
-    } else {
-      errors.push(`Collection generation failed: ${JSON.stringify(genRes.data)}`);
-    }
   }
 
   // 4. Create environments (dev, qa, staging, prod)
