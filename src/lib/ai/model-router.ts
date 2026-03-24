@@ -563,6 +563,12 @@ export async function updateModelScore(
 export async function selectModelDynamic(
   agentType: string,
 ): Promise<RoutingDecision> {
+  // Always respect env overrides (AI_MODEL_<agent>, AI_DEFAULT_MODEL) first
+  const envDecision = selectModel(agentType);
+  if (envDecision.reason.includes("override")) {
+    return envDecision;
+  }
+
   const scores = await prisma.modelQualityScore.findMany({
     where: { agentType },
   });
