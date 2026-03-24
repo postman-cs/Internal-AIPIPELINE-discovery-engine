@@ -13,6 +13,9 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "4mb",
     },
   },
+
+  // Vercel Pro: 15 min max for serverless functions
+  maxDuration: 900,
   serverExternalPackages: ["@prisma/client"],
 
   // Security headers are set in middleware.ts (single source of truth)

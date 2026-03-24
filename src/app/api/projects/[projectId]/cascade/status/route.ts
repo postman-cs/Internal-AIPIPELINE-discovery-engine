@@ -2,8 +2,10 @@ import { NextRequest } from "next/server";
 import { requireProjectAccess, rbacErrorResponse } from "@/lib/rbac";
 import { prisma } from "@/lib/prisma";
 
+export const maxDuration = 900; // Vercel Pro: 15 min for full cascade
+
 const POLL_INTERVAL_MS = 2_000;
-const SAFETY_TIMEOUT_MS = 5 * 60 * 1_000;
+const SAFETY_TIMEOUT_MS = 14 * 60 * 1_000; // 14 min (under 15 min Vercel limit)
 
 const streamBuffer = new Map<string, string[]>();
 
