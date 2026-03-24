@@ -1,10 +1,8 @@
 "use client";
 
 import { useState, useCallback, useTransition } from "react";
-import { MoonBaseMissionWrapper } from "./MoonBaseMissionWrapper";
 import { DeploymentPlanView } from "./DeploymentPlanView";
 import { executeDeploymentStep } from "@/lib/actions/deployment";
-import type { DeploymentStepEntry } from "./MoonBaseMission";
 
 interface DeploymentStep {
   phase?: string;
@@ -25,23 +23,14 @@ interface ExecutionClientProps {
 export function ExecutionClient({
   projectId,
   projectName,
-  userLevel,
   contentJson,
   initialExecutedSteps,
 }: ExecutionClientProps) {
   const [executedSteps, setExecutedSteps] = useState<number[]>(initialExecutedSteps);
-  const [launchQueue, setLaunchQueue] = useState<number[]>([]);
   const [executingStep, setExecutingStep] = useState<number | null>(null);
-  const [xpToast, setXpToast] = useState<{ points: number; title: string } | null>(null);
   const [, startTransition] = useTransition();
 
   const steps = (contentJson.deploymentSteps ?? contentJson.rolloutTimeline ?? contentJson.steps ?? contentJson.timeline ?? []) as DeploymentStep[];
-
-  const deploymentStepEntries: DeploymentStepEntry[] = steps.map((step, i) => ({
-    index: i,
-    title: step.title || step.name || `Step ${i + 1}`,
-    executed: executedSteps.includes(i),
-  }));
 
   const handleExecuteStep = useCallback((stepIndex: number, stepTitle: string) => {
     setExecutingStep(stepIndex);
@@ -49,53 +38,137 @@ export function ExecutionClient({
       const result = await executeDeploymentStep(projectId, stepIndex, stepTitle);
       if (result.success) {
         setExecutedSteps((prev) => [...prev, stepIndex]);
-        setLaunchQueue((prev) => [...prev, stepIndex]);
-        setXpToast({ points: result.xp!.points, title: stepTitle });
-        setTimeout(() => setXpToast(null), 3000);
       }
       setExecutingStep(null);
     });
   }, [projectId]);
 
-  return (
-    <div className="space-y-10">
-      {/* Moon Base Mission Canvas */}
-      <div className="relative">
-        <MoonBaseMissionWrapper
-          deploymentSteps={deploymentStepEntries}
-          launchQueue={launchQueue}
-          userLevel={userLevel}
-          projectName={projectName}
-        />
+  const completedCount = executedSteps.length;
+  const totalCount = steps.length;
+  const progress = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
+  const isComplete = completedCount === totalCount && totalCount > 0;
 
-        {/* XP Toast */}
-        {xpToast && (
-          <div
-            className="absolute top-4 right-4 rounded-xl px-4 py-3 z-20 animate-in slide-in-from-right"
-            style={{
-              background: "rgba(6, 10, 20, 0.95)",
-              border: "1px solid rgba(34,197,94,0.3)",
-              backdropFilter: "blur(12px)",
-              boxShadow: "0 0 20px rgba(34,197,94,0.15)",
-            }}
-          >
-            <div className="flex items-center gap-3">
+  return (
+    <div className="space-y-8">
+      {/* Execution Status Header */}
+      <div
+        className="rounded-xl p-6 relative overflow-hidden"
+        style={{
+          background: "linear-gradient(135deg, rgba(6,10,20,0.9), rgba(15,23,42,0.95))",
+          border: `1px solid ${isComplete ? "rgba(16,185,129,0.25)" : "rgba(99,102,241,0.2)"}`,
+        }}
+      >
+        {/* Subtle grid background */}
+        <div className="absolute inset-0 opacity-[0.03]" style={{
+          backgroundImage: "linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)",
+          backgroundSize: "40px 40px",
+        }} />
+
+        <div className="relative flex items-center justify-between">
+          <div className="flex items-center gap-5">
+            {/* Progress ring */}
+            <div className="relative w-16 h-16">
+              <svg viewBox="0 0 36 36" className="w-16 h-16 -rotate-90">
+                <path
+                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                  fill="none"
+                  stroke="rgba(255,255,255,0.06)"
+                  strokeWidth="2.5"
+                />
+                <path
+                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                  fill="none"
+                  stroke={isComplete ? "#10b981" : "#6366f1"}
+                  strokeWidth="2.5"
+                  strokeDasharray={`${progress}, 100`}
+                  strokeLinecap="round"
+                  style={{ transition: "stroke-dasharray 0.5s ease" }}
+                />
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className="text-sm font-bold tabular-nums" style={{ color: isComplete ? "#10b981" : "#a5b4fc" }}>
+                  {Math.round(progress)}%
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <h2 className="text-lg font-semibold" style={{ color: "var(--foreground)" }}>
+                {projectName}
+              </h2>
+              <p className="text-sm mt-0.5" style={{ color: "var(--foreground-dim)" }}>
+                {isComplete
+                  ? "All deployment steps executed"
+                  : `${completedCount} of ${totalCount} deployment steps completed`
+                }
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {/* Status indicators */}
+            <div className="flex items-center gap-4 text-xs" style={{ color: "var(--foreground-dim)" }}>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full" style={{ background: "#10b981" }} />
+                <span>{completedCount} Complete</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full" style={{ background: "rgba(255,255,255,0.15)" }} />
+                <span>{totalCount - completedCount} Remaining</span>
+              </div>
+            </div>
+
+            {isComplete && (
               <div
-                className="w-8 h-8 rounded-full flex items-center justify-center"
-                style={{ background: "rgba(34,197,94,0.15)", color: "#22c55e" }}
+                className="px-4 py-2 rounded-lg text-xs font-semibold tracking-wide"
+                style={{
+                  background: "rgba(16,185,129,0.1)",
+                  color: "#10b981",
+                  border: "1px solid rgba(16,185,129,0.2)",
+                }}
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58" />
-                </svg>
+                DEPLOYMENT COMPLETE
               </div>
-              <div>
-                <p className="text-xs font-semibold" style={{ color: "#22c55e" }}>
-                  +{xpToast.points} XP
-                </p>
-                <p className="text-[10px]" style={{ color: "rgba(200,210,255,0.5)" }}>
-                  {xpToast.title} deployed
-                </p>
-              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Timeline bar */}
+        {totalCount > 0 && (
+          <div className="mt-5 relative">
+            <div className="h-1 rounded-full" style={{ background: "rgba(255,255,255,0.06)" }}>
+              <div
+                className="h-1 rounded-full transition-all duration-700"
+                style={{
+                  width: `${progress}%`,
+                  background: isComplete
+                    ? "linear-gradient(90deg, #10b981, #06d6a0)"
+                    : "linear-gradient(90deg, #6366f1, #818cf8)",
+                }}
+              />
+            </div>
+            <div className="flex justify-between mt-2">
+              {steps.map((step, i) => (
+                <div
+                  key={i}
+                  className="flex flex-col items-center"
+                  style={{ width: `${100 / totalCount}%` }}
+                >
+                  <div
+                    className="w-2.5 h-2.5 rounded-full border-2 transition-all duration-300"
+                    style={{
+                      background: executedSteps.includes(i) ? (isComplete ? "#10b981" : "#6366f1") : "transparent",
+                      borderColor: executedSteps.includes(i) ? (isComplete ? "#10b981" : "#6366f1") : "rgba(255,255,255,0.15)",
+                    }}
+                  />
+                  <span
+                    className="text-[8px] mt-1 text-center leading-tight max-w-[60px] truncate"
+                    style={{ color: executedSteps.includes(i) ? "var(--foreground-muted)" : "var(--foreground-dim)" }}
+                  >
+                    {step.title || step.name || `Step ${i + 1}`}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -108,54 +181,6 @@ export function ExecutionClient({
         executingStep={executingStep}
         executedSteps={executedSteps}
       />
-
-      {/* Progress summary */}
-      {steps.length > 0 && (
-        <div
-          className="rounded-xl px-5 py-4 flex items-center justify-between"
-          style={{
-            background: "rgba(34,197,94,0.03)",
-            border: "1px solid rgba(34,197,94,0.1)",
-          }}
-        >
-          <div className="flex items-center gap-3">
-            <div
-              className="w-10 h-10 rounded-full flex items-center justify-center"
-              style={{
-                background: `conic-gradient(#22c55e ${(executedSteps.length / steps.length) * 360}deg, rgba(34,197,94,0.1) 0deg)`,
-              }}
-            >
-              <div
-                className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold"
-                style={{ background: "var(--background)", color: "#22c55e" }}
-              >
-                {Math.round((executedSteps.length / steps.length) * 100)}%
-              </div>
-            </div>
-            <div>
-              <p className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>
-                {executedSteps.length} of {steps.length} steps executed
-              </p>
-              <p className="text-[10px]" style={{ color: "var(--foreground-dim)" }}>
-                {executedSteps.length * 25} XP earned from deployments
-              </p>
-            </div>
-          </div>
-          {executedSteps.length === steps.length && (
-            <span
-              className="text-xs font-bold px-3 py-1.5 rounded-full"
-              style={{
-                background: "rgba(34,197,94,0.15)",
-                color: "#22c55e",
-                border: "1px solid rgba(34,197,94,0.3)",
-                boxShadow: "0 0 12px rgba(34,197,94,0.15)",
-              }}
-            >
-              DEPLOYMENT COMPLETE
-            </span>
-          )}
-        </div>
-      )}
     </div>
   );
 }
