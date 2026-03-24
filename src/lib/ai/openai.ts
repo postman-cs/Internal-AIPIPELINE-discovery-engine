@@ -35,21 +35,31 @@ export async function generateEmbeddings(
     throw new Error("VOYAGE_API_KEY is not set. Add it to your environment variables.");
   }
 
-  const response = await fetch("https://api.voyageai.com/v1/embeddings", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: EMBEDDING_MODEL,
-      input: texts,
-    }),
-  });
+  // Voyage AI free tier (no payment method) = 3 RPM. Retry on 429.
+  let response: Response | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    response = await fetch("https://api.voyageai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: EMBEDDING_MODEL,
+        input: texts,
+      }),
+    });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Voyage AI embedding failed (${response.status}): ${body}`);
+    if (response.status !== 429) break;
+    // Wait before retry: 20s, 40s
+    const wait = (attempt + 1) * 20_000;
+    console.warn(`[embeddings] Rate limited (429), retrying in ${wait / 1000}s...`);
+    await new Promise((r) => setTimeout(r, wait));
+  }
+
+  if (!response || !response.ok) {
+    const body = response ? await response.text() : "No response";
+    throw new Error(`Voyage AI embedding failed (${response?.status}): ${body}`);
   }
 
   const json = await response.json() as {
