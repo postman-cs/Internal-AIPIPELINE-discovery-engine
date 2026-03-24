@@ -104,7 +104,7 @@ export const MODELS: Record<string, ModelSpec> = {
     modelId: "claude-sonnet-4-20250514",
     displayName: "Claude Sonnet 4",
     contextWindow: 200_000,
-    maxOutputTokens: 64_000,
+    maxOutputTokens: 16_384,
     costPer1kInput: 0.003,
     costPer1kOutput: 0.015,
     strengths: ["analysis", "synthesis", "nuance", "instruction_following", "long_form"],
@@ -440,16 +440,20 @@ async function completeAnthropic(req: CompletionRequest): Promise<CompletionResp
     systemPrompt += "\n\nIMPORTANT: You MUST respond with ONLY valid JSON. No markdown, no code fences, no explanation text outside the JSON. Start your response with { and end with }.";
   }
 
+  // Use streaming to avoid Anthropic's 10-min non-streaming limit for long outputs.
+  // .stream() returns a helper that collects the full message while streaming.
+  const stream = client.messages.stream({
+    model: req.model.modelId,
+    max_tokens: req.model.maxOutputTokens,
+    system: systemPrompt,
+    messages: [
+      { role: "user", content: req.userPrompt },
+    ],
+    temperature: req.temperature ?? 0.1,
+  });
+
   const response = await withTimeout(
-    client.messages.create({
-      model: req.model.modelId,
-      max_tokens: req.model.maxOutputTokens,
-      system: systemPrompt,
-      messages: [
-        { role: "user", content: req.userPrompt },
-      ],
-      temperature: req.temperature ?? 0.1,
-    }),
+    stream.finalMessage(),
     LLM_TIMEOUT_MS,
     `Anthropic/${req.model.modelId}`,
   );
