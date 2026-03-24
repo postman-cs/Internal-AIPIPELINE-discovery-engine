@@ -134,12 +134,18 @@ export const secretsBlueprintItemSchema = z.object({
   required: z.boolean().optional().default(false),
   category: z.string().optional().default("application"),
   platforms: z.union([
+    // Full object array: [{ platform, platformLabel, configPath, configSnippet }]
     z.array(z.object({
       platform: z.string(),
       platformLabel: z.string().optional().default(""),
       configPath: z.string().optional().default(""),
       configSnippet: z.string().optional(),
     }).passthrough()),
+    // Simple string array: ["GitHub Secrets", "AWS Secrets Manager"]
+    z.array(z.string()).transform((arr) =>
+      arr.map((s) => ({ platform: s, platformLabel: s, configPath: "", configSnippet: undefined }))
+    ),
+    // Record/object format: { github: { ... }, aws: { ... } }
     z.record(z.unknown()).transform((obj) => {
       return Object.entries(obj).map(([key, val]) => {
         const v = (val && typeof val === "object" ? val : {}) as Record<string, unknown>;
