@@ -90,40 +90,81 @@ async function provisionPostmanWorkspace(
   const errors: string[] = [];
   const slug = projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
-  // ── 1. Create workspace ──────────────────────────────────────────────
-  const wsRes = await postmanApi("/workspaces", token, {
-    method: "POST",
-    body: {
-      workspace: {
-        name: `${slug}-api-service`,
-        type: "team",
-        description: `${projectName} — One Service = One Workspace = One Repo. Auto-provisioned by CSE AI Pipeline.\n\nArchitecture: One Service = One Workspace = One Repo\nSpec Hub: Source of truth (YAML)\nCollections: Derived from spec\nGovernance: Spectral rules in .spectral.yml`,
-      },
-    },
-  });
+  // ── 1. Create or reuse workspace (idempotent) ─────────────────────────
+  const wsName = `${slug}-api-service`;
+  let workspaceId: string | undefined;
+  let workspaceUrl: string | undefined;
 
-  if (!wsRes.ok) {
-    errors.push(`Workspace: ${JSON.stringify(wsRes.data)}`);
-    return { errors };
+  // Check if workspace already exists
+  const existingWs = await postmanApi("/workspaces", token);
+  if (existingWs.ok) {
+    const wsList = (existingWs.data.workspaces as Array<{ id: string; name: string }>) ?? [];
+    const match = wsList.find((w) => w.name === wsName);
+    if (match) {
+      workspaceId = match.id;
+      workspaceUrl = `https://go.postman.co/workspace/${workspaceId}`;
+    }
   }
-  const workspaceId = (wsRes.data.workspace as Record<string, unknown>)?.id as string;
-  const workspaceUrl = `https://go.postman.co/workspace/${workspaceId}`;
 
-  // ── 2. Push spec to Spec Hub (v12 /specs endpoint) ───────────────────
+  if (!workspaceId) {
+    const wsRes = await postmanApi("/workspaces", token, {
+      method: "POST",
+      body: {
+        workspace: {
+          name: wsName,
+          type: "team",
+          description: `${projectName} — One Service = One Workspace = One Repo. Auto-provisioned by CSE AI Pipeline.`,
+        },
+      },
+    });
+
+    if (!wsRes.ok) {
+      errors.push(`Workspace: ${JSON.stringify(wsRes.data)}`);
+      return { errors };
+    }
+    workspaceId = (wsRes.data.workspace as Record<string, unknown>)?.id as string;
+    workspaceUrl = `https://go.postman.co/workspace/${workspaceId}`;
+  }
+
+  // ── 2. Push spec to Spec Hub — create or update (idempotent) ──────────
   let specId: string | undefined;
-  const specRes = await postmanApi(`/specs?workspaceId=${workspaceId}`, token, {
-    method: "POST",
-    body: {
-      name: `${projectName} API`,
-      type: "OPENAPI:3.0",
-      files: [{ path: "openapi.yaml", content: specYaml }],
-    },
-  });
 
-  if (specRes.ok) {
-    specId = specRes.data.id as string;
-  } else {
-    errors.push(`Spec Hub: ${JSON.stringify(specRes.data)}`);
+  // Check if spec already exists in this workspace
+  const existingSpecs = await postmanApi(`/specs?workspaceId=${workspaceId}`, token);
+  if (existingSpecs.ok) {
+    const specsList = (existingSpecs.data.specs as Array<{ id: string; name: string }>) ?? [];
+    const existing = specsList.find((s) => s.name === `${projectName} API`);
+    if (existing) {
+      specId = existing.id;
+      // Update existing spec files
+      const updateRes = await postmanApi(`/specs/${specId}`, token, {
+        method: "PUT",
+        body: {
+          name: `${projectName} API`,
+          files: [{ path: "openapi.yaml", content: specYaml }],
+        },
+      });
+      if (!updateRes.ok) {
+        errors.push(`Spec Hub update: ${JSON.stringify(updateRes.data)}`);
+      }
+    }
+  }
+
+  if (!specId) {
+    const specRes = await postmanApi(`/specs?workspaceId=${workspaceId}`, token, {
+      method: "POST",
+      body: {
+        name: `${projectName} API`,
+        type: "OPENAPI:3.0",
+        files: [{ path: "openapi.yaml", content: specYaml }],
+      },
+    });
+
+    if (specRes.ok) {
+      specId = specRes.data.id as string;
+    } else {
+      errors.push(`Spec Hub: ${JSON.stringify(specRes.data)}`);
+    }
   }
 
   // ── 3. Derive baseline collection from spec ──────────────────────────
@@ -423,6 +464,34 @@ async function pushFilesToGitLab(
   if (res.ok) return { ok: true };
   const commitErr = typeof res.data.message === "string" ? res.data.message : JSON.stringify(res.data.message ?? res.status);
   return { ok: false, error: `GitLab commit (${res.status}): ${commitErr}` };
+}
+
+async function pushFilesToGitLabUpsert(
+  projectId: number,
+  files: RepoFile[],
+  token: string,
+  message = "Update scaffold — CSE deliverables",
+  branch = "main"
+): Promise<{ ok: boolean; error?: string }> {
+  // Check which files exist to determine create vs update action
+  const actions: Array<{ action: string; file_path: string; content: string }> = [];
+  for (const f of files) {
+    const fileCheck = await gitlabApi(`/projects/${projectId}/repository/files/${encodeURIComponent(f.path)}?ref=${branch}`, token);
+    actions.push({
+      action: fileCheck.ok ? "update" : "create",
+      file_path: f.path,
+      content: f.content,
+    });
+  }
+
+  const res = await gitlabApi(`/projects/${projectId}/repository/commits`, token, {
+    method: "POST",
+    body: { branch, commit_message: message, actions },
+  });
+
+  if (res.ok) return { ok: true };
+  const commitErr = typeof res.data.message === "string" ? res.data.message : JSON.stringify(res.data.message ?? res.status);
+  return { ok: false, error: `GitLab upsert (${res.status}): ${commitErr}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -1090,77 +1159,86 @@ export async function scaffoldProjectRepo(projectId: string, customInstructions?
     ),
   ];
 
-  // --- Route to correct platform ---
+  // --- Route to correct platform (idempotent: create if missing, update if exists) ---
+  let repoUrl: string;
+
   if (customerUsesGitLab) {
-    // GitLab: create repo under the configured namespace
     const gitlabNamespace = project.gitRepoOwner || "dshive";
-    const createResult = await createGitLabRepo(
-      gitlabNamespace,
-      repoName,
-      `${project.name} — CSE API Platform. Auto-scaffolded.`,
-      gitToken,
-    );
-    if (!createResult.ok) return { error: createResult.error ?? "Failed to create GitLab repo" };
 
-    const pushResult = await pushFilesToGitLab(createResult.projectId!, files, gitToken);
-    if (!pushResult.ok) return { error: `Repo created but file push failed: ${pushResult.error}` };
+    // Check if repo already exists
+    const existingRepo = await gitlabApi(
+      `/projects/${encodeURIComponent(`${gitlabNamespace}/${repoName}`)}`, gitToken
+    );
+
+    let glProjectId: number;
+    if (existingRepo.ok) {
+      // Repo exists — use it
+      glProjectId = existingRepo.data.id as number;
+      repoUrl = existingRepo.data.web_url as string;
+      // Update files (use "update" for existing, "create" for new)
+      const pushResult = await pushFilesToGitLab(glProjectId, files, gitToken, "Update scaffold — CSE deliverables");
+      if (!pushResult.ok) {
+        // Files might already exist — try with all "update" actions
+        const updateFiles = files.map((f) => ({ ...f }));
+        const retryResult = await pushFilesToGitLabUpsert(glProjectId, updateFiles, gitToken);
+        if (!retryResult.ok) return { error: `File push failed: ${retryResult.error}` };
+      }
+    } else {
+      // Create new repo
+      const createResult = await createGitLabRepo(gitlabNamespace, repoName,
+        `${project.name} — CSE API Platform. Auto-scaffolded.`, gitToken);
+      if (!createResult.ok) return { error: createResult.error ?? "Failed to create GitLab repo" };
+      glProjectId = createResult.projectId!;
+      repoUrl = createResult.url!;
+
+      const pushResult = await pushFilesToGitLab(glProjectId, files, gitToken);
+      if (!pushResult.ok) return { error: `Repo created but file push failed: ${pushResult.error}` };
+    }
 
     await prisma.project.update({
       where: { id: projectId },
-      data: {
-        gitProvider: "gitlab",
-        gitRepoOwner: gitlabNamespace,
-        gitRepoName: repoName,
-        lastRepoPushAt: new Date(),
-      },
+      data: { gitProvider: "gitlab", gitRepoOwner: gitlabNamespace, gitRepoName: repoName, lastRepoPushAt: new Date() },
     });
-
-    revalidatePath(`/projects/${projectId}`);
-    revalidatePath(`/projects/${projectId}/repo`);
-    revalidatePath(`/projects/${projectId}/execution`);
-
-    return {
-      success: true,
-      repoUrl: createResult.url!,
-      filesCreated: files.length,
-      postmanWorkspaceUrl: postmanResult?.workspaceUrl,
-      postmanErrors: postmanResult?.errors,
-    };
   } else {
-    // GitHub: create repo under the configured org
     const repoOrg = project.gitRepoOwner || "danielshively-source";
-    const createResult = await createGitHubRepo(
-      repoOrg,
-      repoName,
-      `${project.name} — CSE API Platform. Auto-scaffolded.`,
-      gitToken,
-    );
-    if (!createResult.ok) return { error: createResult.error ?? "Failed to create GitHub repo" };
 
-    const owner = createResult.url!.split("/").slice(-2, -1)[0] || repoOrg;
-    const pushResult = await pushFilesToGitHub(owner, repoName, files, gitToken);
-    if (!pushResult.ok) return { error: `Repo created but file push failed: ${pushResult.error}` };
+    // Check if repo already exists
+    const existingRepo = await githubApi(`/repos/${repoOrg}/${repoName}`, gitToken);
 
+    if (existingRepo.ok) {
+      // Repo exists — push updated files
+      repoUrl = existingRepo.data.html_url as string;
+      const owner = repoOrg;
+      const pushResult = await pushFilesToGitHub(owner, repoName, files, gitToken, "Update scaffold — CSE deliverables");
+      if (!pushResult.ok) return { error: `File push failed: ${pushResult.error}` };
+    } else {
+      // Create new repo
+      const createResult = await createGitHubRepo(repoOrg, repoName,
+        `${project.name} — CSE API Platform. Auto-scaffolded.`, gitToken);
+      if (!createResult.ok) return { error: createResult.error ?? "Failed to create GitHub repo" };
+      repoUrl = createResult.url!;
+
+      const owner = createResult.url!.split("/").slice(-2, -1)[0] || repoOrg;
+      const pushResult = await pushFilesToGitHub(owner, repoName, files, gitToken);
+      if (!pushResult.ok) return { error: `Repo created but file push failed: ${pushResult.error}` };
+    }
+
+    const owner = repoUrl.split("/").slice(-2, -1)[0] || repoOrg;
     await prisma.project.update({
       where: { id: projectId },
-      data: {
-        gitProvider: "github",
-        gitRepoOwner: owner,
-        gitRepoName: repoName,
-        lastRepoPushAt: new Date(),
-      },
+      data: { gitProvider: "github", gitRepoOwner: owner, gitRepoName: repoName, lastRepoPushAt: new Date() },
     });
-
-    revalidatePath(`/projects/${projectId}`);
-    revalidatePath(`/projects/${projectId}/repo`);
-    revalidatePath(`/projects/${projectId}/execution`);
-
-    return {
-      success: true,
-      repoUrl: createResult.url!,
-      filesCreated: files.length,
-      postmanWorkspaceUrl: postmanResult?.workspaceUrl,
-      postmanErrors: postmanResult?.errors,
-    };
   }
+
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}/repo`);
+  revalidatePath(`/projects/${projectId}/execution`);
+
+  return {
+    success: true,
+    repoUrl,
+    filesCreated: files.length,
+    postmanWorkspaceUrl: postmanResult?.workspaceUrl,
+    postmanErrors: postmanResult?.errors,
+  };
 }
