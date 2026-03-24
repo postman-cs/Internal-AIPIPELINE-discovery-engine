@@ -8,21 +8,28 @@
 import { z } from "zod";
 import { runAgent } from "./runner";
 
+// Accept string, object, or array — coerce non-strings to JSON strings
+const flexString = z.union([
+  z.string(),
+  z.array(z.unknown()).transform((v) => JSON.stringify(v)),
+  z.record(z.unknown()).transform((v) => JSON.stringify(v)),
+]);
+
 export const buildLogOutputSchema = z.object({
-  context: z.string(),
-  useCase: z.string(),
-  useCaseOneSentence: z.string(),
-  successCriteria: z.string(),
-  environmentBaseline: z.string(),
-  internalProof: z.string(),
-  whatWeBuilt: z.string(),
-  valueUnlocked: z.string(),
-  reusablePatterns: z.string(),
-  implementationKit: z.string(),
-  productGapsRisks: z.string(),
-  caseStudySummary: z.string(),
-  nextMotion: z.string(),
-  nextSteps: z.string(),
+  context: flexString,
+  useCase: flexString,
+  useCaseOneSentence: flexString.optional().default(""),
+  successCriteria: flexString,
+  environmentBaseline: flexString,
+  internalProof: flexString,
+  whatWeBuilt: flexString,
+  valueUnlocked: flexString,
+  reusablePatterns: flexString,
+  implementationKit: flexString.optional().default(""),
+  productGapsRisks: flexString.optional().default(""),
+  caseStudySummary: flexString.optional().default(""),
+  nextMotion: flexString.optional().default(""),
+  nextSteps: flexString.optional().default(""),
 });
 
 export type BuildLogOutput = z.infer<typeof buildLogOutputSchema>;
