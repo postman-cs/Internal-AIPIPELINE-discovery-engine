@@ -117,8 +117,9 @@ async function pushFilesToGitLab(
   branch = "main"
 ): Promise<{ ok: boolean; error?: string }> {
   // GitLab commits API accepts multiple file actions in one commit
+  // Use "update" for README.md (auto-created by init), "create" for everything else
   const actions = files.map((f) => ({
-    action: "create" as const,
+    action: (f.path === "README.md" ? "update" : "create") as "create" | "update",
     file_path: f.path,
     content: f.content,
   }));
