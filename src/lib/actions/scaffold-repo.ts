@@ -513,7 +513,7 @@ export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldRe
 
   // Repo naming
   const repoSlug = project.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const repoOrg = project.gitRepoOwner || "postmanCS";
+  const repoOrg = project.gitRepoOwner || "danielshively-source";
   const repoName = project.gitRepoName || `${repoSlug}-api-platform`;
 
   // --- Create repo ---
