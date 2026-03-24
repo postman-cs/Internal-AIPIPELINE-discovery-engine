@@ -104,7 +104,7 @@ export const MODELS: Record<string, ModelSpec> = {
     modelId: "claude-sonnet-4-20250514",
     displayName: "Claude Sonnet 4",
     contextWindow: 200_000,
-    maxOutputTokens: 16_000,
+    maxOutputTokens: 64_000,
     costPer1kInput: 0.003,
     costPer1kOutput: 0.015,
     strengths: ["analysis", "synthesis", "nuance", "instruction_following", "long_form"],
@@ -234,8 +234,10 @@ const LONG_OUTPUT_AGENTS = new Set([
   "FutureStateDesigner",
   "SolutionDesigner",
   "InfrastructurePlanner",
+  "TestDesigner",
   "CraftSolution",
   "TestSolution",
+  "DeploymentPlanner",
   "BuildLogGenerator",
 ]);
 
