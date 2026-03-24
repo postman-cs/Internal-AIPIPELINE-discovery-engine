@@ -94,15 +94,29 @@ async function provisionPostmanWorkspace(
   const workspaceId = (wsRes.data.workspace as Record<string, unknown>)?.id as string;
   const workspaceUrl = `https://go.postman.co/workspace/${workspaceId}`;
 
-  // 2. Import OpenAPI spec as a collection (generates endpoints from spec)
-  //    Uses /import/openapi which works on all plans (no API Builder limit)
+  // 2. Push spec to Spec Hub (v12 /specs endpoint — no API Builder needed)
   const collectionIds: string[] = [];
-  const importRes = await postmanApi(`/import/openapi?workspace=${workspaceId}`, token, {
+  let specId: string | undefined;
+
+  const specRes = await postmanApi(`/specs?workspaceId=${workspaceId}`, token, {
     method: "POST",
     body: {
-      type: "string",
-      input: specYaml,
+      name: `${projectName} API`,
+      type: "OPENAPI:3.0",
+      files: [{ path: "openapi.yaml", content: specYaml }],
     },
+  });
+
+  if (specRes.ok) {
+    specId = specRes.data.id as string;
+  } else {
+    errors.push(`Spec Hub push failed: ${JSON.stringify(specRes.data)}`);
+  }
+
+  // 3. Derive collection from spec via import/openapi (into the same workspace)
+  const importRes = await postmanApi(`/import/openapi?workspace=${workspaceId}`, token, {
+    method: "POST",
+    body: { type: "string", input: specYaml },
   });
 
   if (importRes.ok) {
@@ -111,7 +125,7 @@ async function provisionPostmanWorkspace(
       if (col.id) collectionIds.push(col.id);
     }
   } else {
-    errors.push(`Spec import failed: ${JSON.stringify(importRes.data)}`);
+    errors.push(`Collection generation failed: ${JSON.stringify(importRes.data)}`);
   }
 
   // 4. Create environments (dev, qa, staging, prod)
