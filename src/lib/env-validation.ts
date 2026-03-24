@@ -16,6 +16,9 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required for OpenAI models").optional(),
   ANTHROPIC_API_KEY: z.string().min(1, "ANTHROPIC_API_KEY is required for Anthropic models").optional(),
 
+  // Embeddings — Voyage AI (free tier: 200M tokens/month)
+  VOYAGE_API_KEY: z.string().min(1, "VOYAGE_API_KEY is required for embeddings").optional(),
+
   // Model routing overrides (optional)
   AI_DEFAULT_MODEL: z.string().optional(), // Force all agents to use a specific model
 

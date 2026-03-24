@@ -134,9 +134,9 @@ export async function ingestDocument(
   }
 
   // 5. Generate embeddings (batch)
-  if (!process.env.OPENAI_API_KEY) {
+  if (!process.env.VOYAGE_API_KEY) {
     throw new Error(
-      "OPENAI_API_KEY is not set. Embeddings require an OpenAI API key — add it to your .env.local file."
+      "VOYAGE_API_KEY is not set. Embeddings require a Voyage AI API key — add it to your environment variables."
     );
   }
 

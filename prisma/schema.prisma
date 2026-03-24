@@ -364,7 +364,7 @@ model DocumentChunk {
   document      SourceDocument              @relation(fields: [documentId], references: [id], onDelete: Cascade)
   projectId     String
   content       String
-  embedding     Unsupported("vector(3072)")
+  embedding     Unsupported("vector(512)")
   tokenCount    Int?
   evidenceLabel String                      // EVIDENCE-1, EVIDENCE-2, ...
   createdAt     DateTime                    @default(now())

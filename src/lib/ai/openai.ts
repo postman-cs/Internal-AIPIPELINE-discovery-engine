@@ -1,8 +1,8 @@
 /**
- * OpenAI client — used for embeddings and as the default LLM provider.
+ * AI clients — embeddings (Voyage AI) and LLM provider (OpenAI/Anthropic).
  *
+ * Embeddings use Voyage AI (free tier: 200M tokens/month).
  * For multi-model routing (OpenAI + Anthropic), see model-router.ts.
- * This file is kept for backward compatibility and embedding operations.
  */
 
 import OpenAI from "openai";
@@ -15,14 +15,14 @@ export const openai =
 
 if (process.env.NODE_ENV !== "production") globalForOpenAI.openai = openai;
 
-export const EMBEDDING_MODEL = "text-embedding-3-large";
-export const EMBEDDING_DIMENSIONS = 3072;
+export const EMBEDDING_MODEL = "voyage-3-lite";
+export const EMBEDDING_DIMENSIONS = 512;
 
 /** @deprecated Use model-router.ts selectModel() instead */
 export const LLM_MODEL = "gpt-4.1";
 
 /**
- * Generate embeddings for one or more texts.
+ * Generate embeddings via Voyage AI.
  * Returns an array of float arrays, one per input text.
  */
 export async function generateEmbeddings(
@@ -30,14 +30,33 @@ export async function generateEmbeddings(
 ): Promise<number[][]> {
   if (texts.length === 0) return [];
 
-  const response = await openai.embeddings.create({
-    model: EMBEDDING_MODEL,
-    input: texts,
-    dimensions: EMBEDDING_DIMENSIONS,
+  const apiKey = process.env.VOYAGE_API_KEY;
+  if (!apiKey) {
+    throw new Error("VOYAGE_API_KEY is not set. Add it to your environment variables.");
+  }
+
+  const response = await fetch("https://api.voyageai.com/v1/embeddings", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: EMBEDDING_MODEL,
+      input: texts,
+    }),
   });
 
-  // Sort by index to preserve input order
-  return response.data
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Voyage AI embedding failed (${response.status}): ${body}`);
+  }
+
+  const json = await response.json() as {
+    data: Array<{ embedding: number[]; index: number }>;
+  };
+
+  return json.data
     .sort((a, b) => a.index - b.index)
     .map((d) => d.embedding);
 }
