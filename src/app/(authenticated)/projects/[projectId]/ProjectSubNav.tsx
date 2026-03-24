@@ -6,10 +6,8 @@ import { usePathname } from "next/navigation";
 const TABS = [
   { href: "", label: "Overview", icon: "overview", shortLabel: "Overview", phase: null },
   { href: "/discovery", label: "Discovery", icon: "discovery", shortLabel: "Discover", phase: "DISCOVERY" },
-  { href: "/assumptions", label: "Assumptions", icon: "assumptions", shortLabel: "Verify", phase: null },
   { href: "/topology", label: "Topology", icon: "topology", shortLabel: "Topology", phase: "CURRENT_TOPOLOGY" },
   { href: "/cicd", label: "CI/CD Playbook", icon: "cicd", shortLabel: "CI/CD", phase: "CRAFT_SOLUTION" },
-  { href: "/blockers", label: "Blockers", icon: "blockers", shortLabel: "Blockers", phase: null },
   { href: "/updates", label: "Cascade Updates", icon: "updates", shortLabel: "Updates", phase: null },
   { href: "/execution", label: "Execution", icon: "execution", shortLabel: "Execute", phase: "DEPLOYMENT_PLAN" },
   { href: "/execution/missions", label: "Missions", icon: "missions", shortLabel: "Missions", phase: "MEETINGS" },
