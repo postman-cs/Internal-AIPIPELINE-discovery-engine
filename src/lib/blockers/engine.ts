@@ -206,6 +206,20 @@ export async function persistDetectedBlockers(
       severity: d.severity,
       domain: d.domain,
     });
+
+    // Auto-arm: design a nuke for every detected blocker
+    try {
+      const { designNuke } = await import("@/lib/blockers/nuke-strategist");
+      const nukeResult = await designNuke(blocker.id);
+      if ("nukeId" in nukeResult) {
+        log.info("Auto-armed nuke for blocker", { blockerId: blocker.id, nukeId: nukeResult.nukeId });
+      }
+    } catch (nukeErr) {
+      log.warn("Auto-arm nuke failed (non-fatal)", {
+        blockerId: blocker.id,
+        error: nukeErr instanceof Error ? nukeErr.message : String(nukeErr),
+      });
+    }
   }
 
   return ids;
