@@ -412,7 +412,8 @@ async function createGitLabRepo(
     name,
     description,
     visibility: "private",
-    initialize_with_readme: true,
+    initialize_with_readme: false,
+    default_branch: "main",
   };
   if (ns) body.namespace_id = ns.id;
 
@@ -449,16 +450,16 @@ async function pushFilesToGitLab(
   branch = "main"
 ): Promise<{ ok: boolean; error?: string }> {
   // GitLab commits API accepts multiple file actions in one commit
-  // Use "update" for README.md (auto-created by init), "create" for everything else
   const actions = files.map((f) => ({
-    action: (f.path === "README.md" ? "update" : "create") as "create" | "update",
+    action: "create" as const,
     file_path: f.path,
     content: f.content,
   }));
 
+  // For empty repos (no README init), use start_branch to create the branch
   const res = await gitlabApi(`/projects/${projectId}/repository/commits`, token, {
     method: "POST",
-    body: { branch, commit_message: message, actions },
+    body: { branch, start_branch: branch, commit_message: message, actions },
   });
 
   if (res.ok) return { ok: true };
