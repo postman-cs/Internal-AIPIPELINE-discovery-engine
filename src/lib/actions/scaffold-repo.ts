@@ -501,11 +501,11 @@ export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldRe
     services.push(`${project.name} API`);
   }
 
-  // Detect CI/CD platform from deployment plan
+  // Detect customer's CI/CD platform from deployment plan (for generated configs)
   const ciCdStages = (deploymentPlan.ciCdStages ?? craftSolution.ciCdPipelines ?? []) as Array<{ platform?: string }>;
-  const detectedPlatform = ciCdStages[0]?.platform ?? "github_actions";
-  const isGitLab = detectedPlatform.includes("gitlab");
-  const ciPlatformLabel = isGitLab ? "GitLab CI" : "GitHub Actions";
+  const customerCiPlatform = ciCdStages[0]?.platform ?? "github_actions";
+  const customerUsesGitLab = customerCiPlatform.includes("gitlab");
+  const ciPlatformLabel = customerUsesGitLab ? "GitLab CI" : "GitHub Actions";
 
   // Determine git token — use project token or fall back to env
   const gitToken = project.gitToken || process.env.GITHUB_TOKEN || process.env.GITLAB_TOKEN;
@@ -516,8 +516,9 @@ export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldRe
   const repoOrg = project.gitRepoOwner || "danielshively-source";
   const repoName = project.gitRepoName || `${repoSlug}-api-platform`;
 
-  // --- Create repo ---
-  if (!isGitLab) {
+  // Always create on GitHub (delivery repo). Customer CI configs are generated
+  // for their platform (GitHub Actions or GitLab CI) inside the repo.
+  {
     const createResult = await createGitHubRepo(
       repoOrg,
       repoName,
@@ -533,7 +534,11 @@ export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldRe
       { path: ".spectral.yml", content: generateSpectralRules() },
       { path: "collections/smoke-tests.json", content: generateSmokeTestCollection(project.name, services) },
       { path: "collections/contract-tests.json", content: generateContractTestCollection(project.name, services) },
-      { path: ".github/workflows/api-tests.yml", content: generateGitHubActionsCI(domain) },
+      // Generate CI config for the customer's platform
+      ...(customerUsesGitLab
+        ? [{ path: ".gitlab-ci.yml", content: generateGitLabCI(domain) }]
+        : [{ path: ".github/workflows/api-tests.yml", content: generateGitHubActionsCI(domain) }]
+      ),
     ];
 
     // Generate environments
@@ -569,8 +574,5 @@ export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldRe
       repoUrl: createResult.url!,
       filesCreated: files.length,
     };
-  } else {
-    // GitLab — TODO: implement GitLab API
-    return { error: "GitLab repo creation not yet implemented. Use GitHub for now." };
   }
 }
