@@ -43,6 +43,7 @@ RULES:
 - If you cannot determine the cloud provider from evidence, provide generic Terraform with explanatory comments.
 - Do NOT hallucinate evidence IDs. Only use evidence IDs from the provided context.
 - Return strict JSON matching the schema exactly.
+- CRITICAL: Keep output COMPACT. IaC snippets should be abbreviated with key sections only (not full files). Use comments like "// ... remaining config" to indicate omitted boilerplate. Limit each iacSnippet content to ~50 lines. Limit cloudResources to the 8 most critical. This prevents output truncation.
 
 CLOUD RESOURCES:
 - cloudResources: list each infrastructure component needed. Map to topology nodes when possible.
