@@ -273,8 +273,9 @@ export async function ingestDiscoveryDocument(
       impactedPhases,
     };
   } catch (error) {
-    console.error("[discovery] Ingestion error:", error);
-    return { error: "Document ingestion failed. Please try again." };
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[discovery] Ingestion error:", msg, error);
+    return { error: `Ingestion failed: ${msg}` };
   }
 }
 
