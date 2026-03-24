@@ -1166,13 +1166,14 @@ export async function scaffoldProjectRepo(projectId: string, customInstructions?
   if (customerUsesGitLab) {
     const gitlabNamespace = project.gitRepoOwner || "dshive";
 
-    // Check if repo already exists
+    // Check if repo already exists (and is NOT marked for deletion)
     const existingRepo = await gitlabApi(
       `/projects/${encodeURIComponent(`${gitlabNamespace}/${repoName}`)}`, gitToken
     );
+    const isMarkedForDeletion = existingRepo.ok && !!(existingRepo.data.marked_for_deletion_at);
 
     let glProjectId: number;
-    if (existingRepo.ok) {
+    if (existingRepo.ok && !isMarkedForDeletion) {
       // Repo exists — use it
       glProjectId = existingRepo.data.id as number;
       repoUrl = existingRepo.data.web_url as string;
