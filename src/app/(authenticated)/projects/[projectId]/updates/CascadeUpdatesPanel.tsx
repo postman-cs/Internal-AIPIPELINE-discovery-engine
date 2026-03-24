@@ -203,18 +203,24 @@ export function CascadeUpdatesPanel({
   const handleTriggerUpdate = () => {
     setMessage(null);
     startTransition(async () => {
-      const result = await triggerCascadeUpdate(projectId);
-      if ("error" in result && result.error) {
-        setMessage({ type: "error", text: result.error });
-        return;
-      }
-      if ("jobId" in result && result.jobId) {
-        setActiveJobId(result.jobId);
-        setMessage({ type: "info", text: "Cascade update started. Monitoring progress..." });
-      } else {
-        const phases = "impactedPhases" in result ? (result.impactedPhases as string[]) : [];
-        setMessage({ type: "success", text: `Cascade complete: ${phases.length} phases impacted.` });
+      try {
+        // Call API route directly — runs inline with maxDuration=800s
+        // Server action fire-and-forgets which gets killed on Vercel serverless
+        const res = await fetch(`/api/projects/${projectId}/cascade/recompute`, {
+          method: "POST",
+        });
+        const result = await res.json();
+        if (result.error) {
+          setMessage({ type: "error", text: result.error });
+          return;
+        }
+        setMessage({
+          type: "success",
+          text: `Cascade complete: ${result.completedTasks}/${result.impactedPhases?.length ?? 0} phases processed.`,
+        });
         router.refresh();
+      } catch (err) {
+        setMessage({ type: "error", text: `Cascade failed: ${err instanceof Error ? err.message : String(err)}` });
       }
     });
   };
