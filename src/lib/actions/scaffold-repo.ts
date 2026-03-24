@@ -356,6 +356,7 @@ function generateReadme(
   domain: string,
   services: string[],
   ciPlatform: string,
+  customInstructions?: string,
 ): string {
   return `# ${projectName} — API Platform
 
@@ -421,7 +422,7 @@ Spectral rules in \`.spectral.yml\` enforce:
 2. Install Postman CLI: \`npm install -g @postman/cli\`
 3. Import the workspace: \`postman-cli import --workspace . \`
 4. Run tests: \`postman-cli run collections/smoke-tests.json -e environments/${domain}-dev.json\`
-`;
+${customInstructions ? `\n## Custom Instructions\n\n${customInstructions}\n` : ""}`;
 }
 
 function generateOpenApiSpec(projectName: string, domain: string, services: string[]): string {
@@ -649,7 +650,7 @@ function generateContractTestCollection(projectName: string, services: string[])
 // Main scaffold action
 // ---------------------------------------------------------------------------
 
-export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldResult> {
+export async function scaffoldProjectRepo(projectId: string, customInstructions?: string): Promise<ScaffoldResult> {
   const session = await requireAuth();
 
   const project = await prisma.project.findFirst({
@@ -746,7 +747,7 @@ export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldRe
 
   // Generate files (shared between GitHub and GitLab)
   const files: RepoFile[] = [
-    { path: "README.md", content: generateReadme(project.name, domain, services, ciPlatformLabel) },
+    { path: "README.md", content: generateReadme(project.name, domain, services, ciPlatformLabel, customInstructions) },
     { path: "specs/openapi.yaml", content: specYaml },
     { path: ".spectral.yml", content: generateSpectralRules() },
     { path: "collections/smoke-tests.json", content: generateSmokeTestCollection(project.name, services) },

@@ -11,14 +11,17 @@ interface Props {
 
 export function ScaffoldRepoButton({ projectId, hasArtifact, existingRepoUrl }: Props) {
   const [isPending, setIsPending] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState("");
+  const [showPrompt, setShowPrompt] = useState(false);
   const [result, setResult] = useState<{ success?: boolean; repoUrl?: string; error?: string; filesCreated?: number; postmanWorkspaceUrl?: string; postmanErrors?: string[] } | null>(null);
 
   const handleScaffold = async () => {
     setIsPending(true);
     setResult(null);
     try {
-      const res = await scaffoldProjectRepo(projectId);
+      const res = await scaffoldProjectRepo(projectId, customPrompt.trim() || undefined);
       setResult(res);
+      setShowPrompt(false);
     } catch (err) {
       setResult({ error: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -99,6 +102,28 @@ export function ScaffoldRepoButton({ projectId, hasArtifact, existingRepoUrl }: 
           </button>
         </div>
       </div>
+
+      {/* Custom instructions toggle + textarea */}
+      {!showPrompt && !repoUrl && (
+        <button
+          onClick={() => setShowPrompt(true)}
+          className="mt-3 text-xs font-medium"
+          style={{ color: "var(--foreground-dim)" }}
+        >
+          + Add custom instructions
+        </button>
+      )}
+      {showPrompt && (
+        <div className="mt-3">
+          <textarea
+            value={customPrompt}
+            onChange={(e) => setCustomPrompt(e.target.value)}
+            placeholder="Optional: Add specific instructions for the repo scaffold (e.g., 'Use Kong as the API gateway', 'Include gRPC proto files', 'Add Terraform modules for AWS ECS'...)"
+            className="input-field text-xs resize-y font-mono w-full"
+            style={{ minHeight: "80px" }}
+          />
+        </div>
+      )}
 
       {result?.error && (
         <div className="mt-3 text-xs rounded-lg px-3 py-2" style={{ background: "rgba(239,68,68,0.08)", color: "#f87171", border: "1px solid rgba(239,68,68,0.15)" }}>
