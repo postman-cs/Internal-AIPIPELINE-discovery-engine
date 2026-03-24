@@ -263,8 +263,8 @@ export async function runAgent<T>(
     delete parsedObj.detectedBlockers;
 
     // ── Validate with Zod (with auto-unwrap fallback) ────────────────────
-    let parseResult = resilientZodParse(outputSchema, parsedObj, agentType);
-    let zodAttempts = parseResult.attempts;
+    const parseResult = resilientZodParse(outputSchema, parsedObj, agentType);
+    const zodAttempts = parseResult.attempts;
     const messageHistory: Array<{ role: string; content: string }> = [
       { role: "system", content: enhancedSystemPrompt.slice(0, 500) + "..." },
       { role: "user", content: userPrompt.slice(0, 500) + "..." },
