@@ -219,7 +219,18 @@ async function createGitLabRepo(
   };
   if (ns) body.namespace_id = ns.id;
 
-  const res = await gitlabApi("/projects", token, { method: "POST", body });
+  let res = await gitlabApi("/projects", token, { method: "POST", body });
+
+  // If name is taken (pending deletion), retry with a suffix
+  if (!res.ok && res.status === 400) {
+    const errStr = JSON.stringify(res.data);
+    if (errStr.includes("has already been taken")) {
+      body.name = `${name}-${Date.now().toString(36).slice(-4)}`;
+      body.path = body.name;
+      res = await gitlabApi("/projects", token, { method: "POST", body });
+    }
+  }
+
   if (res.ok) {
     return {
       ok: true,
