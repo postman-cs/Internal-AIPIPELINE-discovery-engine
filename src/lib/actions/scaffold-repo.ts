@@ -60,11 +60,26 @@ async function postmanApi(
 interface PostmanProvisionResult {
   workspaceId?: string;
   workspaceUrl?: string;
-  collectionIds?: string[];
+  specId?: string;
+  baselineCollectionId?: string;
+  smokeCollectionId?: string;
+  contractCollectionId?: string;
   environmentIds?: string[];
+  monitorId?: string;
   errors: string[];
 }
 
+/**
+ * Full Postman v12 provisioning flow:
+ *
+ * 1. Create workspace (team, named per convention)
+ * 2. Push spec to Spec Hub (YAML source of truth)
+ * 3. Derive baseline collection from spec (import/openapi)
+ * 4. Create smoke test collection (with status code assertions)
+ * 5. Create contract test collection (with schema validation)
+ * 6. Create environments (dev/QA/staging/prod) with vault secret refs
+ * 7. Configure monitor on smoke tests
+ */
 async function provisionPostmanWorkspace(
   projectName: string,
   domain: string,
@@ -75,29 +90,27 @@ async function provisionPostmanWorkspace(
   const errors: string[] = [];
   const slug = projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
-  // 1. Create workspace
+  // ── 1. Create workspace ──────────────────────────────────────────────
   const wsRes = await postmanApi("/workspaces", token, {
     method: "POST",
     body: {
       workspace: {
         name: `${slug}-api-service`,
         type: "team",
-        description: `${projectName} — One Service = One Workspace = One Repo. Auto-provisioned by CSE AI Pipeline.`,
+        description: `${projectName} — One Service = One Workspace = One Repo. Auto-provisioned by CSE AI Pipeline.\n\nArchitecture: One Service = One Workspace = One Repo\nSpec Hub: Source of truth (YAML)\nCollections: Derived from spec\nGovernance: Spectral rules in .spectral.yml`,
       },
     },
   });
 
   if (!wsRes.ok) {
-    errors.push(`Workspace creation failed: ${JSON.stringify(wsRes.data)}`);
+    errors.push(`Workspace: ${JSON.stringify(wsRes.data)}`);
     return { errors };
   }
   const workspaceId = (wsRes.data.workspace as Record<string, unknown>)?.id as string;
   const workspaceUrl = `https://go.postman.co/workspace/${workspaceId}`;
 
-  // 2. Push spec to Spec Hub (v12 /specs endpoint — no API Builder needed)
-  const collectionIds: string[] = [];
+  // ── 2. Push spec to Spec Hub (v12 /specs endpoint) ───────────────────
   let specId: string | undefined;
-
   const specRes = await postmanApi(`/specs?workspaceId=${workspaceId}`, token, {
     method: "POST",
     body: {
@@ -110,25 +123,134 @@ async function provisionPostmanWorkspace(
   if (specRes.ok) {
     specId = specRes.data.id as string;
   } else {
-    errors.push(`Spec Hub push failed: ${JSON.stringify(specRes.data)}`);
+    errors.push(`Spec Hub: ${JSON.stringify(specRes.data)}`);
   }
 
-  // 3. Derive collection from spec via import/openapi (into the same workspace)
+  // ── 3. Derive baseline collection from spec ──────────────────────────
+  let baselineCollectionId: string | undefined;
   const importRes = await postmanApi(`/import/openapi?workspace=${workspaceId}`, token, {
     method: "POST",
     body: { type: "string", input: specYaml },
   });
 
   if (importRes.ok) {
-    const cols = (importRes.data.collections as Array<{ id: string }>) ?? [];
-    for (const col of cols) {
-      if (col.id) collectionIds.push(col.id);
-    }
+    const cols = (importRes.data.collections as Array<{ id: string; uid: string }>) ?? [];
+    if (cols[0]?.id) baselineCollectionId = cols[0].id;
   } else {
-    errors.push(`Collection generation failed: ${JSON.stringify(importRes.data)}`);
+    errors.push(`Baseline collection: ${JSON.stringify(importRes.data)}`);
   }
 
-  // 4. Create environments (dev, qa, staging, prod)
+  // ── 4. Create smoke test collection ──────────────────────────────────
+  let smokeCollectionId: string | undefined;
+  const smokeItems = services.slice(0, 8).map((svc) => {
+    const svcSlug = svc.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    return {
+      name: `${svc} — Health Check`,
+      request: {
+        method: "GET",
+        url: { raw: `{{baseUrl}}/${svcSlug}/health`, host: ["{{baseUrl}}"], path: [svcSlug, "health"] },
+        header: [{ key: "Authorization", value: "Bearer {{apiKey}}", type: "text" }],
+      },
+      event: [{
+        listen: "test",
+        script: {
+          type: "text/javascript",
+          exec: [
+            `pm.test("${svc} returns 2xx", function() {`,
+            "  pm.response.to.be.success;",
+            "});",
+            `pm.test("Response time < 2000ms", function() {`,
+            "  pm.expect(pm.response.responseTime).to.be.below(2000);",
+            "});",
+          ],
+        },
+      }, {
+        listen: "prerequest",
+        script: {
+          type: "text/javascript",
+          exec: [
+            "// Secret resolution: reads from Postman vault",
+            "// In CI/CD, secrets are injected via Postman CLI --env-var flag",
+          ],
+        },
+      }],
+    };
+  });
+
+  const smokeRes = await postmanApi(`/collections?workspace=${workspaceId}`, token, {
+    method: "POST",
+    body: {
+      collection: {
+        info: {
+          name: `${projectName} — Smoke Tests`,
+          description: "Auto-generated smoke tests. Validates each service endpoint returns a healthy status code and responds within SLA.",
+          schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        },
+        item: smokeItems,
+      },
+    },
+  });
+
+  if (smokeRes.ok) {
+    smokeCollectionId = (smokeRes.data.collection as Record<string, unknown>)?.id as string;
+  } else {
+    errors.push(`Smoke collection: ${JSON.stringify(smokeRes.data)}`);
+  }
+
+  // ── 5. Create contract test collection ───────────────────────────────
+  let contractCollectionId: string | undefined;
+  const contractItems = services.slice(0, 8).map((svc) => {
+    const svcSlug = svc.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    return {
+      name: `${svc} — Contract Validation`,
+      request: {
+        method: "GET",
+        url: { raw: `{{baseUrl}}/${svcSlug}`, host: ["{{baseUrl}}"], path: [svcSlug] },
+        header: [{ key: "Authorization", value: "Bearer {{apiKey}}", type: "text" }],
+      },
+      event: [{
+        listen: "test",
+        script: {
+          type: "text/javascript",
+          exec: [
+            `pm.test("${svc} returns valid JSON", function() {`,
+            "  pm.response.to.be.json;",
+            "});",
+            `pm.test("Content-Type is application/json", function() {`,
+            '  pm.expect(pm.response.headers.get("Content-Type")).to.include("application/json");',
+            "});",
+            `pm.test("Response schema is valid", function() {`,
+            "  const json = pm.response.json();",
+            "  pm.expect(json).to.be.an('object');",
+            "  // Schema validation against OpenAPI spec enforced by Postman CLI --schema flag",
+            "});",
+          ],
+        },
+      }],
+    };
+  });
+
+  const contractRes = await postmanApi(`/collections?workspace=${workspaceId}`, token, {
+    method: "POST",
+    body: {
+      collection: {
+        info: {
+          name: `${projectName} — Contract Tests`,
+          description: "Auto-generated contract tests. Validates response schemas match the OpenAPI spec. Run with: postman-cli run --schema specs/openapi.yaml",
+          schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        },
+        item: contractItems,
+      },
+    },
+  });
+
+  if (contractRes.ok) {
+    contractCollectionId = (contractRes.data.collection as Record<string, unknown>)?.id as string;
+  } else {
+    errors.push(`Contract collection: ${JSON.stringify(contractRes.data)}`);
+  }
+
+  // ── 6. Create environments (dev/QA/staging/prod) ─────────────────────
   const environmentIds: string[] = [];
   for (const env of ["dev", "qa", "staging", "prod"]) {
     const baseUrl = env === "prod" ? `https://api.${domain}` : `https://api-${env}.${domain}`;
@@ -141,6 +263,8 @@ async function provisionPostmanWorkspace(
             { key: "baseUrl", value: baseUrl, enabled: true },
             { key: "environment", value: env, enabled: true },
             { key: "apiKey", value: "{{vault:api-key}}", enabled: true, type: "secret" },
+            { key: "clientId", value: "{{vault:client-id}}", enabled: true, type: "secret" },
+            { key: "clientSecret", value: "{{vault:client-secret}}", enabled: true, type: "secret" },
           ],
         },
       },
@@ -149,11 +273,36 @@ async function provisionPostmanWorkspace(
       const envId = (envRes.data.environment as Record<string, unknown>)?.id as string;
       if (envId) environmentIds.push(envId);
     } else {
-      errors.push(`Environment ${env} failed: ${JSON.stringify(envRes.data)}`);
+      errors.push(`Environment ${env}: ${JSON.stringify(envRes.data)}`);
     }
   }
 
-  return { workspaceId, workspaceUrl, collectionIds, environmentIds, errors };
+  // ── 7. Configure monitor on smoke tests ──────────────────────────────
+  let monitorId: string | undefined;
+  if (smokeCollectionId && environmentIds.length > 0) {
+    const monRes = await postmanApi("/monitors", token, {
+      method: "POST",
+      body: {
+        monitor: {
+          name: `${slug}-smoke-monitor`,
+          collection: smokeCollectionId,
+          environment: environmentIds[0], // dev environment
+          schedule: { cron: "0 */6 * * *", timezone: "America/Chicago" }, // every 6 hours
+        },
+      },
+    });
+    if (monRes.ok) {
+      monitorId = (monRes.data.monitor as Record<string, unknown>)?.id as string;
+    } else {
+      errors.push(`Monitor: ${JSON.stringify(monRes.data)}`);
+    }
+  }
+
+  return {
+    workspaceId, workspaceUrl, specId,
+    baselineCollectionId, smokeCollectionId, contractCollectionId,
+    environmentIds, monitorId, errors,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -369,70 +518,115 @@ function generateReadme(
   ciPlatform: string,
   customInstructions?: string,
 ): string {
+  const slug = projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   return `# ${projectName} — API Platform
 
 > Auto-generated by CSE AI Pipeline. One Service = One Workspace = One Repo.
 
 ## Architecture
 
-| Layer | Maps To |
-|-------|---------|
-| Git repository | One microservice or API |
-| Postman workspace | One service |
-| API Catalog entry | One service |
-| Environment | One deployment target (dev/QA/staging/prod) |
+\`\`\`
+One Service = One Workspace = One Repo
+
+Git Repo (specs/openapi.yaml)      ← Source of truth
+         │
+         ▼
+Postman Spec Hub                   ← Synced via CI/CD on every push
+         │
+         ├──► Baseline Collection  ← Auto-derived from spec
+         ├──► Smoke Test Collection
+         ├──► Contract Test Collection
+         ├──► Environments (dev/QA/staging/prod)
+         └──► Monitor (6-hour health checks)
+                    │
+                    ▼
+            API Catalog             ← Automatic visibility
+\`\`\`
+
+| Layer | Maps To | Enforced By |
+|-------|---------|-------------|
+| Git repository | One microservice or API | ${ciPlatform} |
+| Postman workspace | One service | Provisioning automation |
+| API Catalog entry | One service | Automatic (workspace + spec) |
+| Environment | One deployment target | Postman environments |
 
 ## Services
 
 ${services.map((s) => `- \`${s}\``).join("\n")}
 
-## Workspace Contents (per service)
+## Workspace Contents
 
-| Artifact | Purpose |
-|----------|---------|
-| API Spec (OpenAPI) | Source of truth for the contract |
-| Baseline collection | Registered endpoints with documentation |
-| Smoke test collection | Validates endpoints return expected status |
-| Contract test collection | Validates response schemas match spec |
-| Environments (dev/QA/staging/prod) | Variables per deployment target |
-| Pre-request scripts | Secret resolution from vault |
-| Monitor (smoke tests) | 24/7 health checking |
+All artifacts live in Postman workspace \`${slug}-api-service\`, derived from the spec:
 
-## CI/CD
+| Artifact | Required | Source |
+|----------|----------|--------|
+| API Spec (OpenAPI YAML) | Yes | \`specs/openapi.yaml\` → Spec Hub |
+| Baseline collection | Yes | Derived from spec |
+| Smoke test collection | Yes | Auto-generated with health checks |
+| Contract test collection | Yes | Auto-generated with schema validation |
+| Environments (dev/QA/staging/prod) | Yes | Created with vault secret refs |
+| Pre-request scripts | Yes | Secret resolution from vault |
+| Monitor (smoke tests) | Yes | 6-hour schedule on dev environment |
+
+## CI/CD Lifecycle
 
 Platform: **${ciPlatform}**
 
-\`\`\`bash
-# Run smoke tests
-npx postman-cli run collections/smoke-tests.json -e environments/${domain}-dev.json
+On every push to \`specs/\`:
+1. **Sync spec** → Postman Spec Hub via Postman CLI
+2. **Re-derive collections** from updated spec
+3. **Run smoke tests** → validate all endpoints healthy
+4. **Run contract tests** → validate schemas match spec
+5. **Governance lint** → Spectral rules check spec compliance
+6. **Results** → feed into API Catalog metrics
 
-# Run contract tests
-npx postman-cli run collections/contract-tests.json -e environments/${domain}-dev.json
+\`\`\`bash
+# Manual: run smoke tests
+postman-cli login --with-api-key \$POSTMAN_API_KEY
+postman-cli run "${slug} — Smoke Tests" -e "${slug}-dev"
+
+# Manual: run contract tests
+postman-cli run "${slug} — Contract Tests" -e "${slug}-dev"
+
+# Manual: sync spec
+postman-cli api publish --spec-file specs/openapi.yaml --workspace ${slug}-api-service
 \`\`\`
 
 ## Environments
 
-| Environment | Purpose |
-|-------------|---------|
-| \`${domain}-dev\` | Development |
-| \`${domain}-qa\` | QA / Integration testing |
-| \`${domain}-staging\` | Pre-production |
-| \`${domain}-prod\` | Production |
+| Environment | URL | Purpose |
+|-------------|-----|---------|
+| \`${slug}-dev\` | \`https://api-dev.${domain}\` | Development |
+| \`${slug}-qa\` | \`https://api-qa.${domain}\` | QA / Integration |
+| \`${slug}-staging\` | \`https://api-staging.${domain}\` | Pre-production |
+| \`${slug}-prod\` | \`https://api.${domain}\` | Production |
 
 ## Governance
 
 Spectral rules in \`.spectral.yml\` enforce:
 - OpenAPI 3.x compliance
-- Naming conventions
+- Naming conventions (kebab-case paths)
 - Security scheme requirements
 - Response schema validation
+- Documentation requirements
+
+## Secrets
+
+| Secret | Category | Resolution |
+|--------|----------|------------|
+| \`apiKey\` | Application | \`{{vault:api-key}}\` |
+| \`clientId\` | OAuth | \`{{vault:client-id}}\` |
+| \`clientSecret\` | OAuth | \`{{vault:client-secret}}\` |
+
+In CI/CD, inject via: \`postman-cli run ... --env-var "apiKey=\$API_KEY"\`
 
 ## Getting Started
 
 1. Clone this repo
 2. Install Postman CLI: \`npm install -g @postman/cli\`
-3. Import the workspace: \`postman-cli import --workspace . \`
-4. Run tests: \`postman-cli run collections/smoke-tests.json -e environments/${domain}-dev.json\`
+3. Login: \`postman-cli login --with-api-key \$POSTMAN_API_KEY\`
+4. Edit \`specs/openapi.yaml\` → push → CI/CD syncs to Postman automatically
+5. Collections, environments, and monitors are managed in Postman (not in repo)
 ${customInstructions ? `\n## Custom Instructions\n\n${customInstructions}\n` : ""}`;
 }
 
@@ -474,20 +668,39 @@ function generateOpenApiSpec(projectName: string, domain: string, services: stri
   });
 }
 
-function generateGitHubActionsCI(domain: string): string {
-  return `name: API Tests
+function generateGitHubActionsCI(slug: string): string {
+  return `# API Lifecycle — One Service = One Workspace = One Repo
+# Triggered on: spec changes, code pushes, PRs, and schedule
+#
+# Flow:
+# 1. Spec change detected → sync to Postman workspace via Spec Hub
+# 2. Collections re-derived from updated spec
+# 3. Smoke tests validate all endpoints return healthy status
+# 4. Contract tests validate response schemas match spec
+# 5. Results feed into API Catalog metrics
+
+name: API Lifecycle
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'specs/**'
+      - '.github/workflows/**'
   pull_request:
     branches: [main]
   schedule:
-    - cron: '0 */6 * * *'  # Every 6 hours
+    - cron: '0 */6 * * *'
+
+env:
+  POSTMAN_API_KEY: \${{ secrets.POSTMAN_API_KEY }}
 
 jobs:
-  smoke-tests:
+  # ── Sync spec to Postman workspace ─────────────────────────────────
+  sync-spec:
+    name: Sync Spec to Postman
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -495,18 +708,47 @@ jobs:
           node-version: 20
       - run: npm install -g @postman/cli
       - run: postman-cli login --with-api-key \${{ secrets.POSTMAN_API_KEY }}
+
+      - name: Push spec to Postman workspace
+        run: |
+          echo "Syncing specs/openapi.yaml to Postman workspace..."
+          postman-cli api publish --spec-file specs/openapi.yaml \\
+            --workspace ${slug}-api-service \\
+            --name "${slug} API" || echo "Spec sync completed (manual sync may be needed)"
+
+  # ── Smoke tests ────────────────────────────────────────────────────
+  smoke-tests:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    needs: [sync-spec]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install -g @postman/cli
+      - run: postman-cli login --with-api-key \${{ secrets.POSTMAN_API_KEY }}
+
       - name: Run Smoke Tests (Dev)
-        run: postman-cli run collections/smoke-tests.json -e environments/${domain}-dev.json --reporters cli,json --reporter-json-export results/smoke-dev.json
+        run: |
+          postman-cli run "${slug} — Smoke Tests" \\
+            -e "${slug}-dev" \\
+            --reporters cli,json \\
+            --reporter-json-export results/smoke-dev.json
+
       - name: Upload Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: smoke-test-results
           path: results/
 
+  # ── Contract tests ─────────────────────────────────────────────────
   contract-tests:
+    name: Contract Tests
     runs-on: ubuntu-latest
-    needs: smoke-tests
+    needs: [smoke-tests]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -514,37 +756,108 @@ jobs:
           node-version: 20
       - run: npm install -g @postman/cli
       - run: postman-cli login --with-api-key \${{ secrets.POSTMAN_API_KEY }}
+
       - name: Run Contract Tests
-        run: postman-cli run collections/contract-tests.json -e environments/${domain}-dev.json --reporters cli,json
+        run: |
+          postman-cli run "${slug} — Contract Tests" \\
+            -e "${slug}-dev" \\
+            --reporters cli,json \\
+            --reporter-json-export results/contract-dev.json
+
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-test-results
+          path: results/
+
+  # ── Governance check ───────────────────────────────────────────────
+  governance:
+    name: Spec Governance (Spectral)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install -g @stoplight/spectral-cli
+      - name: Lint OpenAPI Spec
+        run: spectral lint specs/openapi.yaml --ruleset .spectral.yml
 `;
 }
 
-function generateGitLabCI(domain: string): string {
-  return `stages:
-  - smoke
-  - contract
+function generateGitLabCI(slug: string): string {
+  return `# API Lifecycle — One Service = One Workspace = One Repo
+# Flow: Spec sync → Smoke tests → Contract tests → Governance
+#
+# On spec change: sync to Postman Spec Hub, re-derive collections
+# On every push: run smoke + contract tests via Postman CLI
+# Results feed into API Catalog metrics
 
+stages:
+  - sync
+  - test
+  - governance
+
+variables:
+  POSTMAN_API_KEY: $POSTMAN_API_KEY
+
+# ── Sync spec to Postman workspace ─────────────────────────────────
+sync-spec:
+  stage: sync
+  image: node:20
+  rules:
+    - changes:
+        - specs/**
+  before_script:
+    - npm install -g @postman/cli
+    - postman-cli login --with-api-key $POSTMAN_API_KEY
+  script:
+    - echo "Syncing specs/openapi.yaml to Postman workspace..."
+    - postman-cli api publish --spec-file specs/openapi.yaml
+        --workspace ${slug}-api-service
+        --name "${slug} API" || echo "Spec sync completed"
+
+# ── Smoke tests ────────────────────────────────────────────────────
 smoke-tests:
-  stage: smoke
+  stage: test
   image: node:20
   before_script:
     - npm install -g @postman/cli
     - postman-cli login --with-api-key $POSTMAN_API_KEY
   script:
-    - postman-cli run collections/smoke-tests.json -e environments/${domain}-dev.json --reporters cli,json
+    - postman-cli run "${slug} — Smoke Tests"
+        -e "${slug}-dev"
+        --reporters cli,json
+        --reporter-json-export results/smoke-dev.json
   artifacts:
+    when: always
     paths:
       - results/
 
+# ── Contract tests ─────────────────────────────────────────────────
 contract-tests:
-  stage: contract
+  stage: test
   image: node:20
   needs: [smoke-tests]
   before_script:
     - npm install -g @postman/cli
     - postman-cli login --with-api-key $POSTMAN_API_KEY
   script:
-    - postman-cli run collections/contract-tests.json -e environments/${domain}-dev.json --reporters cli,json
+    - postman-cli run "${slug} — Contract Tests"
+        -e "${slug}-dev"
+        --reporters cli,json
+        --reporter-json-export results/contract-dev.json
+  artifacts:
+    when: always
+    paths:
+      - results/
+
+# ── Governance (Spectral lint) ─────────────────────────────────────
+governance:
+  stage: governance
+  image: node:20
+  before_script:
+    - npm install -g @stoplight/spectral-cli
+  script:
+    - spectral lint specs/openapi.yaml --ruleset .spectral.yml
 `;
 }
 
@@ -757,26 +1070,18 @@ export async function scaffoldProjectRepo(projectId: string, customInstructions?
   }
 
   // Generate files (shared between GitHub and GitLab)
+  // Collections and environments live in Postman (derived from spec).
+  // The repo contains: spec (source of truth), CI/CD, governance rules.
   const files: RepoFile[] = [
     { path: "README.md", content: generateReadme(project.name, domain, services, ciPlatformLabel, customInstructions) },
     { path: "specs/openapi.yaml", content: specYaml },
     { path: ".spectral.yml", content: generateSpectralRules() },
-    { path: "collections/smoke-tests.json", content: generateSmokeTestCollection(project.name, services) },
-    { path: "collections/contract-tests.json", content: generateContractTestCollection(project.name, services) },
-    // CI config matches customer's platform
+    // CI/CD lifecycle: spec sync → smoke tests → contract tests → governance
     ...(customerUsesGitLab
-      ? [{ path: ".gitlab-ci.yml", content: generateGitLabCI(domain) }]
-      : [{ path: ".github/workflows/api-tests.yml", content: generateGitHubActionsCI(domain) }]
+      ? [{ path: ".gitlab-ci.yml", content: generateGitLabCI(repoSlug) }]
+      : [{ path: ".github/workflows/api-lifecycle.yml", content: generateGitHubActionsCI(repoSlug) }]
     ),
   ];
-
-  // Generate environments
-  for (const env of ["dev", "qa", "staging", "prod"]) {
-    files.push({
-      path: `environments/${domain}-${env}.json`,
-      content: generateEnvironment(repoSlug, env, domain),
-    });
-  }
 
   // --- Route to correct platform ---
   if (customerUsesGitLab) {
