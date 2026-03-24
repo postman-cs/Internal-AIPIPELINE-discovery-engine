@@ -357,7 +357,7 @@ export async function completeWithFallback(
 // Provider-specific implementations
 // ═══════════════════════════════════════════════════════════════════════════
 
-const LLM_TIMEOUT_MS = 120_000; // 2 minutes
+const LLM_TIMEOUT_MS = 300_000; // 5 minutes — complex agents (infrastructure, topology) need more time
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
