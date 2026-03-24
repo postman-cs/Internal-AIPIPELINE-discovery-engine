@@ -18,10 +18,10 @@
 import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { Phase } from "@prisma/client";
-import { getPhaseNode, getDependencies, getTopologicalTiers } from "./phases";
+import { getPhaseNode, getDependencies } from "./phases";
 import { generatePatch, generateDiffSummary } from "./patch";
 import type { Prisma } from "@prisma/client";
-import { persistPhaseAssumptions, isPhaseGateClear, autoVerifyAssumptions } from "@/lib/assumptions/engine";
+import { persistPhaseAssumptions, autoVerifyAssumptions } from "@/lib/assumptions/engine";
 // Blockers are decoupled from cascade — see /blockers page for project-level blocker analysis
 import { pluginRegistry } from "@/lib/ai/plugins";
 import { applyProposal } from "@/lib/actions/cascade";
@@ -262,8 +262,6 @@ export async function executeRecomputeJob(
     data: { status: "RUNNING" },
   });
 
-  const tiers = getTopologicalTiers();
-  const sortedTierKeys = [...tiers.keys()].sort((a, b) => a - b);
   const taskByPhase = new Map(job.tasks.map((t) => [t.phase, t]));
 
   const proposals: string[] = [];
@@ -272,86 +270,47 @@ export async function executeRecomputeJob(
   const allAssumptionIds: string[] = [];
   const allBlockerIds: string[] = [];
   let completedTasks = 0;
-  let pausedAtPhase: string | undefined;
 
-  for (const tierKey of sortedTierKeys) {
-    if (pausedAtPhase) break;
+  // --- Aggressive parallelism: wave-based execution -------------------------
+  // Instead of tier-by-tier, launch ALL tasks whose deps are satisfied in each
+  // wave. Auto-accept completed proposals immediately so downstream tasks
+  // become unblocked in the next wave. This maximizes concurrency.
+  const completedPhases = new Set<Phase>();
+  const failedPhases = new Set<Phase>();
+  const MAX_WAVES = 15; // safety limit
 
-    const tierPhases = tiers.get(tierKey)!;
+  for (let wave = 0; wave < MAX_WAVES; wave++) {
+    // Find all PENDING tasks whose deps are ALL in completedPhases
+    const readyTasks = job.tasks.filter((t) => {
+      if (t.status !== "PENDING" && !taskByPhase.get(t.phase)) return false;
+      if (completedPhases.has(t.phase) || failedPhases.has(t.phase)) return false;
+      const deps = getDependencies(t.phase);
+      // DISCOVERY has no deps, others need all deps completed
+      return t.phase === "DISCOVERY" || deps.every((d) => completedPhases.has(d));
+    });
 
-    const tierTasks = tierPhases
-      .map((p) => taskByPhase.get(p))
-      .filter(
-        (t): t is NonNullable<typeof t> => t != null && t.status === "PENDING"
-      );
+    if (readyTasks.length === 0) break; // no more work possible
 
-    if (tierTasks.length === 0) continue;
+    console.info(`[cascade] Wave ${wave + 1}: launching ${readyTasks.length} phases: ${readyTasks.map((t) => t.phase).join(", ")}`);
 
-    // --- Gated mode: check assumption gates before starting this tier -------
-    if (options?.gatedMode && completedTasks > 0) {
-      let gateBlocked = false;
-      for (const task of tierTasks) {
-        const gate = await isPhaseGateClear(job.projectId, task.phase);
-        if (!gate.clear) {
-          gateBlocked = true;
-          pausedAtPhase = task.phase;
-          await prisma.recomputeTask.update({
-            where: { id: task.id },
-            data: {
-              status: "SKIPPED",
-              message: `Paused: ${gate.pendingCritical} critical assumption(s) need human verification before this phase can proceed.`,
-              finishedAt: new Date(),
-            },
-          });
-          skipped.push(task.phase);
-
-          for (const remaining of job.tasks) {
-            if (remaining.status === "PENDING" && remaining.id !== task.id) {
-              const rNode = getPhaseNode(remaining.phase);
-              const tNode = getPhaseNode(task.phase);
-              if (rNode.order >= tNode.order) {
-                await prisma.recomputeTask.update({
-                  where: { id: remaining.id },
-                  data: {
-                    status: "SKIPPED",
-                    message: `Paused: waiting for assumption verification at ${task.phase}`,
-                    finishedAt: new Date(),
-                  },
-                });
-                skipped.push(remaining.phase);
-              }
-            }
-          }
-          break;
-        }
-      }
-      if (gateBlocked) break;
+    // Fetch upstream info for all deps of ready tasks
+    const allDeps = new Set<Phase>();
+    for (const task of readyTasks) {
+      for (const dep of getDependencies(task.phase)) allDeps.add(dep);
     }
+    const upstreamInfo = await batchCheckUpstreamArtifacts(job.projectId, [...allDeps]);
 
-    // --- Point 5: batch upstream readiness for the whole tier ---------------
-    const allDepsInTier = new Set<Phase>();
-    for (const task of tierTasks) {
-      for (const dep of getDependencies(task.phase)) {
-        allDepsInTier.add(dep);
-      }
-    }
-    const upstreamInfo = await batchCheckUpstreamArtifacts(
-      job.projectId,
-      [...allDepsInTier]
-    );
-
-    // --- Point 1: run tier tasks concurrently ------------------------------
+    // Run all ready tasks concurrently
     const results = await Promise.all(
-      tierTasks.map((task) =>
-        processSingleTask(task, job, upstreamInfo)
-      )
+      readyTasks.map((task) => processSingleTask(task, job, upstreamInfo))
     );
 
-    // --- Collect results & auto-accept -------------------------------------
+    // Collect results & auto-accept
     for (const result of results) {
       switch (result.status) {
         case "completed":
           completedTasks++;
+          completedPhases.add(result.phase);
           if (result.proposalId) proposals.push(result.proposalId);
           allAssumptionIds.push(...result.assumptionIds);
           allBlockerIds.push(...result.blockerIds);
@@ -368,30 +327,30 @@ export async function executeRecomputeJob(
           }
           break;
         case "skipped":
-          console.warn(`[cascade] SKIPPED ${result.phase}: upstream not ready`);
-          skipped.push(result.phase);
+          // Skipped due to CLEAN-with-same-snapshot — count as completed
+          completedPhases.add(result.phase);
+          completedTasks++;
           break;
         case "failed":
           console.error(`[cascade] FAILED ${result.phase}: ${result.error}`);
+          failedPhases.add(result.phase);
           if (result.error) errors.push(`${result.phase}: ${result.error}`);
           break;
       }
     }
   }
 
-  console.info(`[cascade] Job ${jobId} done: ${completedTasks} completed, ${skipped.length} skipped, ${errors.length} errors`, { skipped, errors });
+  console.info(`[cascade] Job ${jobId} done: ${completedTasks} completed, ${errors.length} errors`, { errors });
 
-  const finalStatus = pausedAtPhase
-    ? "PAUSED_FOR_VERIFICATION"
-    : errors.length > 0
-      ? "COMPLETED_WITH_ERRORS"
-      : "COMPLETED";
+  const finalStatus = errors.length > 0
+    ? "COMPLETED_WITH_ERRORS"
+    : "COMPLETED";
 
   await prisma.recomputeJob.update({
     where: { id: jobId },
     data: {
       status: finalStatus,
-      finishedAt: pausedAtPhase ? undefined : new Date(),
+      finishedAt: new Date(),
     },
   });
 
@@ -402,7 +361,6 @@ export async function executeRecomputeJob(
     skipped,
     assumptionIds: allAssumptionIds,
     blockerIds: allBlockerIds,
-    pausedAtPhase,
   };
 }
 

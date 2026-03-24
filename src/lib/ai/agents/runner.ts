@@ -32,6 +32,8 @@ interface AgentRunConfig<T> {
   skipAssumptionInjection?: boolean;
   /** If true, skip the assumption/blocker extraction prompt (for re-runs of already-clean phases) */
   skipAssumptionExtraction?: boolean;
+  /** If true, include assumption/blocker extraction prompts (default: false for speed) */
+  includeExtractionPrompts?: boolean;
   /** Force a specific model (overrides routing) */
   forceModel?: string;
 }
@@ -125,8 +127,11 @@ export async function runAgent<T>(
     }
   }
 
-  const extractionBlock = config.skipAssumptionExtraction ? "" : ASSUMPTION_EXTRACTION_PROMPT;
-  const citationBlock = config.skipAssumptionExtraction ? "" : CITATION_INSTRUCTION;
+  // Blocker/assumption extraction is decoupled from cascade — skip the heavy
+  // prompt suffix unless explicitly opted in. This reduces prompt size by ~500
+  // tokens per agent call, speeding up responses significantly.
+  const extractionBlock = config.includeExtractionPrompts ? ASSUMPTION_EXTRACTION_PROMPT : "";
+  const citationBlock = CITATION_INSTRUCTION; // always keep citations
   const enhancedSystemPrompt = systemPrompt + extractionBlock + citationBlock + constraintBlock;
   const fullPrompt = enhancedSystemPrompt + "\n\n" + userPrompt;
   const pHash = hashPrompt(fullPrompt);
