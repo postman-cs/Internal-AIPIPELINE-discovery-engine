@@ -359,20 +359,27 @@ export async function executeRecomputeJob(
           if (options?.autoAccept && result.proposalId) {
             try {
               await applyProposal(result.proposalId, { skipMarkDirty: true });
-            } catch {
-              // Non-fatal: proposal stays PENDING if apply fails
+              console.info(`[cascade] Auto-accepted ${result.phase} → CLEAN`);
+            } catch (applyErr) {
+              const msg = applyErr instanceof Error ? applyErr.message : String(applyErr);
+              console.error(`[cascade] Auto-accept failed for ${result.phase}: ${msg}`);
+              errors.push(`${result.phase}: auto-accept failed: ${msg}`);
             }
           }
           break;
         case "skipped":
+          console.warn(`[cascade] SKIPPED ${result.phase}: upstream not ready`);
           skipped.push(result.phase);
           break;
         case "failed":
+          console.error(`[cascade] FAILED ${result.phase}: ${result.error}`);
           if (result.error) errors.push(`${result.phase}: ${result.error}`);
           break;
       }
     }
   }
+
+  console.info(`[cascade] Job ${jobId} done: ${completedTasks} completed, ${skipped.length} skipped, ${errors.length} errors`, { skipped, errors });
 
   const finalStatus = pausedAtPhase
     ? "PAUSED_FOR_VERIFICATION"
