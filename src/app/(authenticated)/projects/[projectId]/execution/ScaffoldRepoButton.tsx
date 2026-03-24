@@ -11,7 +11,7 @@ interface Props {
 
 export function ScaffoldRepoButton({ projectId, hasArtifact, existingRepoUrl }: Props) {
   const [isPending, setIsPending] = useState(false);
-  const [result, setResult] = useState<{ success?: boolean; repoUrl?: string; error?: string; filesCreated?: number } | null>(null);
+  const [result, setResult] = useState<{ success?: boolean; repoUrl?: string; error?: string; filesCreated?: number; postmanWorkspaceUrl?: string; postmanErrors?: string[] } | null>(null);
 
   const handleScaffold = async () => {
     setIsPending(true);
@@ -107,8 +107,19 @@ export function ScaffoldRepoButton({ projectId, hasArtifact, existingRepoUrl }: 
       )}
 
       {result?.success && (
-        <div className="mt-3 text-xs rounded-lg px-3 py-2" style={{ background: "rgba(16,185,129,0.08)", color: "#34d399", border: "1px solid rgba(16,185,129,0.15)" }}>
-          Repo created with {result.filesCreated} files: specs, collections, environments, CI/CD, governance rules.
+        <div className="mt-3 text-xs rounded-lg px-3 py-2 space-y-1" style={{ background: "rgba(16,185,129,0.08)", color: "#34d399", border: "1px solid rgba(16,185,129,0.15)" }}>
+          <p>Repo created with {result.filesCreated} files: OpenAPI spec (YAML), collections, environments, CI/CD, governance.</p>
+          {result.postmanWorkspaceUrl && (
+            <p>
+              Postman workspace provisioned:{" "}
+              <a href={result.postmanWorkspaceUrl} target="_blank" rel="noopener noreferrer" className="underline font-medium">
+                Open in Postman
+              </a>
+            </p>
+          )}
+          {result.postmanErrors && result.postmanErrors.length > 0 && (
+            <p style={{ color: "#fbbf24" }}>Postman warnings: {result.postmanErrors.join("; ")}</p>
+          )}
         </div>
       )}
 

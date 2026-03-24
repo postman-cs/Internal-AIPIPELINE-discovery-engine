@@ -15,6 +15,7 @@
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/session";
 import { revalidatePath } from "next/cache";
+import { stringify as toYaml } from "yaml";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,6 +31,140 @@ interface ScaffoldResult {
   error?: string;
   repoUrl?: string;
   filesCreated?: number;
+  postmanWorkspaceUrl?: string;
+  postmanErrors?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Postman API helpers
+// ---------------------------------------------------------------------------
+
+async function postmanApi(
+  endpoint: string,
+  token: string,
+  options?: { method?: string; body?: unknown }
+): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+  const res = await fetch(`https://api.getpostman.com${endpoint}`, {
+    method: options?.method ?? "GET",
+    headers: {
+      "X-Api-Key": token,
+      "Content-Type": "application/json",
+    },
+    body: options?.body ? JSON.stringify(options.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data: data as Record<string, unknown> };
+}
+
+interface PostmanProvisionResult {
+  workspaceId?: string;
+  workspaceUrl?: string;
+  apiId?: string;
+  collectionIds?: string[];
+  environmentIds?: string[];
+  errors: string[];
+}
+
+async function provisionPostmanWorkspace(
+  projectName: string,
+  domain: string,
+  services: string[],
+  specYaml: string,
+  token: string,
+): Promise<PostmanProvisionResult> {
+  const errors: string[] = [];
+  const slug = projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
+  // 1. Create workspace
+  const wsRes = await postmanApi("/workspaces", token, {
+    method: "POST",
+    body: {
+      workspace: {
+        name: `${slug}-api-service`,
+        type: "team",
+        description: `${projectName} — One Service = One Workspace = One Repo. Auto-provisioned by CSE AI Pipeline.`,
+      },
+    },
+  });
+
+  if (!wsRes.ok) {
+    errors.push(`Workspace creation failed: ${JSON.stringify(wsRes.data)}`);
+    return { errors };
+  }
+  const workspaceId = (wsRes.data.workspace as Record<string, unknown>)?.id as string;
+  const workspaceUrl = `https://go.postman.co/workspace/${workspaceId}`;
+
+  // 2. Create API (pushes spec to Spec Hub)
+  let apiId: string | undefined;
+  const apiRes = await postmanApi("/apis", token, {
+    method: "POST",
+    body: {
+      name: `${projectName} API`,
+      summary: `OpenAPI spec for ${projectName}. Auto-generated from CSE discovery.`,
+      description: `Domain: ${domain}\nServices: ${services.join(", ")}`,
+    },
+  });
+
+  if (apiRes.ok) {
+    apiId = (apiRes.data.api as Record<string, unknown>)?.id as string;
+
+    // 2b. Create schema version (push YAML spec to Spec Hub)
+    const schemaRes = await postmanApi(`/apis/${apiId}/schemas`, token, {
+      method: "POST",
+      body: {
+        type: "openapi:3_0",
+        language: "yaml",
+        schema: specYaml,
+      },
+    });
+    if (!schemaRes.ok) {
+      errors.push(`Schema push failed: ${JSON.stringify(schemaRes.data)}`);
+    }
+  } else {
+    errors.push(`API creation failed: ${JSON.stringify(apiRes.data)}`);
+  }
+
+  // 3. Generate collection from API (derives from spec)
+  const collectionIds: string[] = [];
+  if (apiId) {
+    const genRes = await postmanApi(`/apis/${apiId}/collections`, token, {
+      method: "POST",
+      body: { name: `${projectName} — Baseline Collection` },
+    });
+    if (genRes.ok) {
+      const colId = (genRes.data.collection as Record<string, unknown>)?.id as string;
+      if (colId) collectionIds.push(colId);
+    } else {
+      errors.push(`Collection generation failed: ${JSON.stringify(genRes.data)}`);
+    }
+  }
+
+  // 4. Create environments (dev, qa, staging, prod)
+  const environmentIds: string[] = [];
+  for (const env of ["dev", "qa", "staging", "prod"]) {
+    const baseUrl = env === "prod" ? `https://api.${domain}` : `https://api-${env}.${domain}`;
+    const envRes = await postmanApi("/environments", token, {
+      method: "POST",
+      body: {
+        environment: {
+          name: `${slug}-${env}`,
+          values: [
+            { key: "baseUrl", value: baseUrl, enabled: true },
+            { key: "environment", value: env, enabled: true },
+            { key: "apiKey", value: "{{vault:api-key}}", enabled: true, type: "secret" },
+          ],
+        },
+      },
+    });
+    if (envRes.ok) {
+      const envId = (envRes.data.environment as Record<string, unknown>)?.id as string;
+      if (envId) environmentIds.push(envId);
+    } else {
+      errors.push(`Environment ${env} failed: ${JSON.stringify(envRes.data)}`);
+    }
+  }
+
+  return { workspaceId, workspaceUrl, apiId, collectionIds, environmentIds, errors };
 }
 
 // ---------------------------------------------------------------------------
@@ -322,7 +457,7 @@ function generateOpenApiSpec(projectName: string, domain: string, services: stri
     };
   }
 
-  return JSON.stringify({
+  return toYaml({
     openapi: "3.0.3",
     info: {
       title: `${projectName} API`,
@@ -335,7 +470,7 @@ function generateOpenApiSpec(projectName: string, domain: string, services: stri
       { url: `https://api-dev.${domain}`, description: "Development" },
     ],
     paths,
-  }, null, 2);
+  });
 }
 
 function generateGitHubActionsCI(domain: string): string {
@@ -601,10 +736,29 @@ export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldRe
   const repoSlug = project.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const repoName = project.gitRepoName || `${repoSlug}-api-platform`;
 
+  // Generate OpenAPI spec as YAML
+  const specYaml = generateOpenApiSpec(project.name, domain, services);
+
+  // --- Postman Provisioning (Spec Hub + Workspace + Environments) ---
+  let postmanResult: PostmanProvisionResult | null = null;
+  const postmanApiKey = process.env.POSTMAN_API_KEY;
+  if (postmanApiKey) {
+    postmanResult = await provisionPostmanWorkspace(
+      project.name,
+      domain,
+      services,
+      specYaml,
+      postmanApiKey,
+    );
+    if (postmanResult.errors.length > 0) {
+      console.warn("[scaffold] Postman provisioning warnings:", postmanResult.errors);
+    }
+  }
+
   // Generate files (shared between GitHub and GitLab)
   const files: RepoFile[] = [
     { path: "README.md", content: generateReadme(project.name, domain, services, ciPlatformLabel) },
-    { path: "specs/openapi.json", content: generateOpenApiSpec(project.name, domain, services) },
+    { path: "specs/openapi.yaml", content: specYaml },
     { path: ".spectral.yml", content: generateSpectralRules() },
     { path: "collections/smoke-tests.json", content: generateSmokeTestCollection(project.name, services) },
     { path: "collections/contract-tests.json", content: generateContractTestCollection(project.name, services) },
@@ -652,7 +806,13 @@ export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldRe
     revalidatePath(`/projects/${projectId}/repo`);
     revalidatePath(`/projects/${projectId}/execution`);
 
-    return { success: true, repoUrl: createResult.url!, filesCreated: files.length };
+    return {
+      success: true,
+      repoUrl: createResult.url!,
+      filesCreated: files.length,
+      postmanWorkspaceUrl: postmanResult?.workspaceUrl,
+      postmanErrors: postmanResult?.errors,
+    };
   } else {
     // GitHub: create repo under the configured org
     const repoOrg = project.gitRepoOwner || "danielshively-source";
@@ -682,6 +842,12 @@ export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldRe
     revalidatePath(`/projects/${projectId}/repo`);
     revalidatePath(`/projects/${projectId}/execution`);
 
-    return { success: true, repoUrl: createResult.url!, filesCreated: files.length };
+    return {
+      success: true,
+      repoUrl: createResult.url!,
+      filesCreated: files.length,
+      postmanWorkspaceUrl: postmanResult?.workspaceUrl,
+      postmanErrors: postmanResult?.errors,
+    };
   }
 }
