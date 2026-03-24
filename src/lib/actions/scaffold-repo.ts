@@ -55,6 +55,84 @@ async function githubApi(
   return { ok: res.ok, status: res.status, data: data as Record<string, unknown> };
 }
 
+// ---------------------------------------------------------------------------
+// GitLab API helpers
+// ---------------------------------------------------------------------------
+
+async function gitlabApi(
+  endpoint: string,
+  token: string,
+  options?: { method?: string; body?: unknown }
+): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+  const res = await fetch(`https://gitlab.com/api/v4${endpoint}`, {
+    method: options?.method ?? "GET",
+    headers: {
+      "PRIVATE-TOKEN": token,
+      ...(options?.body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: options?.body ? JSON.stringify(options.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data: data as Record<string, unknown> };
+}
+
+async function createGitLabRepo(
+  namespace: string,
+  name: string,
+  description: string,
+  token: string,
+): Promise<{ ok: boolean; url?: string; projectId?: number; error?: string }> {
+  // Try to find the namespace ID
+  const nsRes = await gitlabApi(`/namespaces?search=${encodeURIComponent(namespace)}`, token);
+  const ns = nsRes.ok ? (nsRes.data as unknown as Array<{ id: number; full_path: string }>)
+    ?.find((n: { full_path: string }) => n.full_path === namespace) : null;
+
+  const body: Record<string, unknown> = {
+    name,
+    description,
+    visibility: "private",
+    initialize_with_readme: true,
+  };
+  if (ns) body.namespace_id = ns.id;
+
+  const res = await gitlabApi("/projects", token, { method: "POST", body });
+  if (res.ok) {
+    return {
+      ok: true,
+      url: res.data.web_url as string,
+      projectId: res.data.id as number,
+    };
+  }
+  return { ok: false, error: `GitLab: ${(res.data.message ?? res.data.error ?? res.status) as string}` };
+}
+
+async function pushFilesToGitLab(
+  projectId: number,
+  files: RepoFile[],
+  token: string,
+  message = "Initial scaffold — CSE deliverables",
+  branch = "main"
+): Promise<{ ok: boolean; error?: string }> {
+  // GitLab commits API accepts multiple file actions in one commit
+  const actions = files.map((f) => ({
+    action: "create" as const,
+    file_path: f.path,
+    content: f.content,
+  }));
+
+  const res = await gitlabApi(`/projects/${projectId}/repository/commits`, token, {
+    method: "POST",
+    body: { branch, commit_message: message, actions },
+  });
+
+  if (res.ok) return { ok: true };
+  return { ok: false, error: `GitLab commit: ${(res.data.message ?? res.status) as string}` };
+}
+
+// ---------------------------------------------------------------------------
+// GitHub API helpers
+// ---------------------------------------------------------------------------
+
 async function createGitHubRepo(
   org: string,
   name: string,
@@ -507,54 +585,84 @@ export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldRe
   const customerUsesGitLab = customerCiPlatform.includes("gitlab");
   const ciPlatformLabel = customerUsesGitLab ? "GitLab CI" : "GitHub Actions";
 
-  // Determine git token — use project token or fall back to env
-  const gitToken = project.gitToken || process.env.GITHUB_TOKEN || process.env.GITLAB_TOKEN;
-  if (!gitToken) return { error: "No Git token configured. Set gitToken on the project or GITHUB_TOKEN env var." };
+  // Determine git token based on platform
+  const gitToken = project.gitToken
+    || (customerUsesGitLab ? process.env.GITLAB_TOKEN : process.env.GITHUB_TOKEN)
+    || process.env.GITHUB_TOKEN
+    || process.env.GITLAB_TOKEN;
+  if (!gitToken) return { error: "No Git token configured. Set gitToken on the project or GITHUB_TOKEN/GITLAB_TOKEN env var." };
 
   // Repo naming
   const repoSlug = project.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const repoOrg = project.gitRepoOwner || "danielshively-source";
   const repoName = project.gitRepoName || `${repoSlug}-api-platform`;
 
-  // Always create on GitHub (delivery repo). Customer CI configs are generated
-  // for their platform (GitHub Actions or GitLab CI) inside the repo.
-  {
+  // Generate files (shared between GitHub and GitLab)
+  const files: RepoFile[] = [
+    { path: "README.md", content: generateReadme(project.name, domain, services, ciPlatformLabel) },
+    { path: "specs/openapi.json", content: generateOpenApiSpec(project.name, domain, services) },
+    { path: ".spectral.yml", content: generateSpectralRules() },
+    { path: "collections/smoke-tests.json", content: generateSmokeTestCollection(project.name, services) },
+    { path: "collections/contract-tests.json", content: generateContractTestCollection(project.name, services) },
+    // CI config matches customer's platform
+    ...(customerUsesGitLab
+      ? [{ path: ".gitlab-ci.yml", content: generateGitLabCI(domain) }]
+      : [{ path: ".github/workflows/api-tests.yml", content: generateGitHubActionsCI(domain) }]
+    ),
+  ];
+
+  // Generate environments
+  for (const env of ["dev", "qa", "staging", "prod"]) {
+    files.push({
+      path: `environments/${domain}-${env}.json`,
+      content: generateEnvironment(repoSlug, env, domain),
+    });
+  }
+
+  // --- Route to correct platform ---
+  if (customerUsesGitLab) {
+    // GitLab: create repo under the configured namespace
+    const gitlabNamespace = project.gitRepoOwner || "echoatlas-group";
+    const createResult = await createGitLabRepo(
+      gitlabNamespace,
+      repoName,
+      `${project.name} — CSE API Platform. Auto-scaffolded.`,
+      gitToken,
+    );
+    if (!createResult.ok) return { error: createResult.error ?? "Failed to create GitLab repo" };
+
+    const pushResult = await pushFilesToGitLab(createResult.projectId!, files, gitToken);
+    if (!pushResult.ok) return { error: `Repo created but file push failed: ${pushResult.error}` };
+
+    await prisma.project.update({
+      where: { id: projectId },
+      data: {
+        gitProvider: "gitlab",
+        gitRepoOwner: gitlabNamespace,
+        gitRepoName: repoName,
+        lastRepoPushAt: new Date(),
+      },
+    });
+
+    revalidatePath(`/projects/${projectId}`);
+    revalidatePath(`/projects/${projectId}/repo`);
+    revalidatePath(`/projects/${projectId}/execution`);
+
+    return { success: true, repoUrl: createResult.url!, filesCreated: files.length };
+  } else {
+    // GitHub: create repo under the configured org
+    const repoOrg = project.gitRepoOwner || "danielshively-source";
     const createResult = await createGitHubRepo(
       repoOrg,
       repoName,
       `${project.name} — CSE API Platform. Auto-scaffolded.`,
       gitToken,
     );
-    if (!createResult.ok) return { error: createResult.error ?? "Failed to create repo" };
+    if (!createResult.ok) return { error: createResult.error ?? "Failed to create GitHub repo" };
 
-    // Generate files
-    const files: RepoFile[] = [
-      { path: "README.md", content: generateReadme(project.name, domain, services, ciPlatformLabel) },
-      { path: "specs/openapi.json", content: generateOpenApiSpec(project.name, domain, services) },
-      { path: ".spectral.yml", content: generateSpectralRules() },
-      { path: "collections/smoke-tests.json", content: generateSmokeTestCollection(project.name, services) },
-      { path: "collections/contract-tests.json", content: generateContractTestCollection(project.name, services) },
-      // Generate CI config for the customer's platform
-      ...(customerUsesGitLab
-        ? [{ path: ".gitlab-ci.yml", content: generateGitLabCI(domain) }]
-        : [{ path: ".github/workflows/api-tests.yml", content: generateGitHubActionsCI(domain) }]
-      ),
-    ];
-
-    // Generate environments
-    for (const env of ["dev", "qa", "staging", "prod"]) {
-      files.push({
-        path: `environments/${domain}-${env}.json`,
-        content: generateEnvironment(repoSlug, env, domain),
-      });
-    }
-
-    // Push files
     const owner = createResult.url!.split("/").slice(-2, -1)[0] || repoOrg;
     const pushResult = await pushFilesToGitHub(owner, repoName, files, gitToken);
     if (!pushResult.ok) return { error: `Repo created but file push failed: ${pushResult.error}` };
 
-    // Update project with repo info
     await prisma.project.update({
       where: { id: projectId },
       data: {
@@ -569,10 +677,6 @@ export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldRe
     revalidatePath(`/projects/${projectId}/repo`);
     revalidatePath(`/projects/${projectId}/execution`);
 
-    return {
-      success: true,
-      repoUrl: createResult.url!,
-      filesCreated: files.length,
-    };
+    return { success: true, repoUrl: createResult.url!, filesCreated: files.length };
   }
 }
