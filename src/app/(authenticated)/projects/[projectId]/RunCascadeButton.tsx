@@ -20,6 +20,14 @@ export function RunCascadeButton({ projectId }: { projectId: string }) {
         alert(result.error);
         return;
       }
+      if (result.errors?.length || result.skipped?.length) {
+        const details = [
+          `Completed: ${result.completedTasks}/${result.impactedPhases?.length ?? "?"}`,
+          result.errors?.length ? `Errors: ${result.errors.join("; ")}` : null,
+          result.skipped?.length ? `Skipped: ${result.skipped.join(", ")}` : null,
+        ].filter(Boolean).join("\n");
+        alert(details);
+      }
       router.push(`/projects/${projectId}/updates`);
       router.refresh();
     } catch (err) {

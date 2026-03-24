@@ -214,9 +214,11 @@ export function CascadeUpdatesPanel({
           setMessage({ type: "error", text: result.error });
           return;
         }
+        const errMsg = result.errors?.length ? `\nErrors: ${result.errors.join("; ")}` : "";
+        const skipMsg = result.skipped?.length ? `\nSkipped: ${result.skipped.join(", ")}` : "";
         setMessage({
-          type: "success",
-          text: `Cascade complete: ${result.completedTasks}/${result.impactedPhases?.length ?? 0} phases processed.`,
+          type: result.errors?.length ? "error" : "success",
+          text: `Cascade complete: ${result.completedTasks}/${result.impactedPhases?.length ?? 0} phases processed.${errMsg}${skipMsg}`,
         });
         router.refresh();
       } catch (err) {
