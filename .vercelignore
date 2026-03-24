@@ -1,0 +1,6 @@
+node_modules
+.next
+*.dump
+.neon
+e2e
+.git
