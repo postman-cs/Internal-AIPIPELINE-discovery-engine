@@ -129,24 +129,14 @@ async function provisionPostmanWorkspace(
   // ── 2. Push spec to Spec Hub — create or update (idempotent) ──────────
   let specId: string | undefined;
 
-  // Check if spec already exists in this workspace
+  // Check if spec already exists in this workspace — reuse it
   const existingSpecs = await postmanApi(`/specs?workspaceId=${workspaceId}`, token);
   if (existingSpecs.ok) {
     const specsList = (existingSpecs.data.specs as Array<{ id: string; name: string }>) ?? [];
     const existing = specsList.find((s) => s.name === `${projectName} API`);
     if (existing) {
       specId = existing.id;
-      // Update existing spec files
-      const updateRes = await postmanApi(`/specs/${specId}`, token, {
-        method: "PUT",
-        body: {
-          name: `${projectName} API`,
-          files: [{ path: "openapi.yaml", content: specYaml }],
-        },
-      });
-      if (!updateRes.ok) {
-        errors.push(`Spec Hub update: ${JSON.stringify(updateRes.data)}`);
-      }
+      // Spec already in Spec Hub — skip re-creation
     }
   }
 
