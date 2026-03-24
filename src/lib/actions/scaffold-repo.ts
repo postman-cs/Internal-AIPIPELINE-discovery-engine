@@ -60,7 +60,6 @@ async function postmanApi(
 interface PostmanProvisionResult {
   workspaceId?: string;
   workspaceUrl?: string;
-  apiId?: string;
   collectionIds?: string[];
   environmentIds?: string[];
   errors: string[];
@@ -95,49 +94,24 @@ async function provisionPostmanWorkspace(
   const workspaceId = (wsRes.data.workspace as Record<string, unknown>)?.id as string;
   const workspaceUrl = `https://go.postman.co/workspace/${workspaceId}`;
 
-  // 2. Create API in the workspace (pushes spec to Spec Hub)
+  // 2. Import OpenAPI spec as a collection (generates endpoints from spec)
+  //    Uses /import/openapi which works on all plans (no API Builder limit)
   const collectionIds: string[] = [];
-  let apiId: string | undefined;
-  const apiRes = await postmanApi(`/apis?workspaceId=${workspaceId}`, token, {
+  const importRes = await postmanApi(`/import/openapi?workspace=${workspaceId}`, token, {
     method: "POST",
     body: {
-      name: `${projectName} API`,
-      summary: `OpenAPI spec for ${projectName}. Auto-generated from CSE discovery.`,
-      description: `Domain: ${domain}\nServices: ${services.join(", ")}`,
+      type: "string",
+      input: specYaml,
     },
   });
 
-  if (apiRes.ok) {
-    apiId = (apiRes.data as Record<string, unknown>)?.id as string
-      ?? (apiRes.data.api as Record<string, unknown>)?.id as string;
-
-    if (apiId) {
-      // 2b. Create schema version (push YAML spec to Spec Hub)
-      const schemaRes = await postmanApi(`/apis/${apiId}/schemas`, token, {
-        method: "POST",
-        body: {
-          type: "openapi:3_0",
-          language: "yaml",
-          schema: specYaml,
-        },
-      });
-      if (!schemaRes.ok) {
-        errors.push(`Schema push failed: ${JSON.stringify(schemaRes.data)}`);
-      }
-
-      // 3. Generate collection from API (derives from spec)
-      const genRes = await postmanApi(`/apis/${apiId}/collections`, token, {
-        method: "POST",
-        body: {},
-      });
-      if (genRes.ok) {
-        const colId = (genRes.data as Record<string, unknown>)?.id as string
-          ?? (genRes.data.collection as Record<string, unknown>)?.id as string;
-        if (colId) collectionIds.push(colId);
-      }
+  if (importRes.ok) {
+    const cols = (importRes.data.collections as Array<{ id: string }>) ?? [];
+    for (const col of cols) {
+      if (col.id) collectionIds.push(col.id);
     }
   } else {
-    errors.push(`API creation failed: ${JSON.stringify(apiRes.data)}`);
+    errors.push(`Spec import failed: ${JSON.stringify(importRes.data)}`);
   }
 
   // 4. Create environments (dev, qa, staging, prod)
@@ -165,7 +139,7 @@ async function provisionPostmanWorkspace(
     }
   }
 
-  return { workspaceId, workspaceUrl, apiId, collectionIds, environmentIds, errors };
+  return { workspaceId, workspaceUrl, collectionIds, environmentIds, errors };
 }
 
 // ---------------------------------------------------------------------------
