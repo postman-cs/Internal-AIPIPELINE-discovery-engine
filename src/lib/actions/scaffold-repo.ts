@@ -625,7 +625,7 @@ export async function scaffoldProjectRepo(projectId: string): Promise<ScaffoldRe
   // --- Route to correct platform ---
   if (customerUsesGitLab) {
     // GitLab: create repo under the configured namespace
-    const gitlabNamespace = project.gitRepoOwner || "echoatlas-group";
+    const gitlabNamespace = project.gitRepoOwner || "dshive";
     const createResult = await createGitLabRepo(
       gitlabNamespace,
       repoName,
