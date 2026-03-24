@@ -157,22 +157,40 @@ async function provisionPostmanWorkspace(
     }
   }
 
-  // ── 3. Derive baseline collection from spec ──────────────────────────
-  let baselineCollectionId: string | undefined;
-  const importRes = await postmanApi(`/import/openapi?workspace=${workspaceId}`, token, {
-    method: "POST",
-    body: { type: "string", input: specYaml },
-  });
+  // ── Fetch existing workspace contents for idempotency ─────────────────
+  const wsContents = await postmanApi(`/workspaces/${workspaceId}`, token);
+  const existingCollections = ((wsContents.data?.workspace as Record<string, unknown>)?.collections as Array<{ id: string; uid: string; name: string }>) ?? [];
+  const existingEnvironments = ((wsContents.data?.workspace as Record<string, unknown>)?.environments as Array<{ id: string; uid: string; name: string }>) ?? [];
 
-  if (importRes.ok) {
-    const cols = (importRes.data.collections as Array<{ id: string; uid: string }>) ?? [];
-    if (cols[0]?.id) baselineCollectionId = cols[0].id;
+  const findCollection = (name: string) => existingCollections.find((c) => c.name === name);
+  const findEnvironment = (name: string) => existingEnvironments.find((e) => e.name === name);
+
+  // ── 3. Derive baseline collection from spec (idempotent) ─────────────
+  let baselineCollectionId: string | undefined;
+  const existingBaseline = findCollection(`${projectName} API`);
+  if (existingBaseline) {
+    baselineCollectionId = existingBaseline.id;
   } else {
-    errors.push(`Baseline collection: ${JSON.stringify(importRes.data)}`);
+    const importRes = await postmanApi(`/import/openapi?workspace=${workspaceId}`, token, {
+      method: "POST",
+      body: { type: "string", input: specYaml },
+    });
+    if (importRes.ok) {
+      const cols = (importRes.data.collections as Array<{ id: string; uid: string }>) ?? [];
+      if (cols[0]?.id) baselineCollectionId = cols[0].id;
+    } else {
+      errors.push(`Baseline collection: ${JSON.stringify(importRes.data)}`);
+    }
   }
 
-  // ── 4. Create smoke test collection ──────────────────────────────────
+  // ── 4. Create smoke test collection (idempotent) ─────────────────────
   let smokeCollectionId: string | undefined;
+  const existingSmoke = findCollection(`${projectName} — Smoke Tests`);
+  if (existingSmoke) {
+    smokeCollectionId = existingSmoke.id;
+  }
+  let smokeCollectionUid: string | undefined;
+  if (!smokeCollectionId) {
   const smokeItems = services.slice(0, 8).map((svc) => {
     const svcSlug = svc.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     return {
@@ -222,7 +240,6 @@ async function provisionPostmanWorkspace(
     },
   });
 
-  let smokeCollectionUid: string | undefined;
   if (smokeRes.ok) {
     const col = smokeRes.data.collection as Record<string, unknown>;
     smokeCollectionId = col?.id as string;
@@ -230,9 +247,15 @@ async function provisionPostmanWorkspace(
   } else {
     errors.push(`Smoke collection: ${JSON.stringify(smokeRes.data)}`);
   }
+  } // end if (!smokeCollectionId)
 
-  // ── 5. Create contract test collection ───────────────────────────────
+  // ── 5. Create contract test collection (idempotent) ──────────────────
   let contractCollectionId: string | undefined;
+  const existingContract = findCollection(`${projectName} — Contract Tests`);
+  if (existingContract) {
+    contractCollectionId = existingContract.id;
+  }
+  if (!contractCollectionId) {
   const contractItems = services.slice(0, 8).map((svc) => {
     const svcSlug = svc.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     return {
@@ -283,13 +306,21 @@ async function provisionPostmanWorkspace(
   } else {
     errors.push(`Contract collection: ${JSON.stringify(contractRes.data)}`);
   }
+  } // end if (!contractCollectionId)
 
-  // ── 6. Create environments (dev/QA/staging/prod) ─────────────────────
+  // ── 6. Create environments (dev/QA/staging/prod) — idempotent ────────
   const environmentIds: string[] = [];
   const environmentUids: string[] = [];
   for (const env of ["dev", "qa", "staging", "prod"]) {
+    const envName = `${slug}-${env}`;
+    const existingEnv = findEnvironment(envName);
+    if (existingEnv) {
+      environmentIds.push(existingEnv.id);
+      environmentUids.push(existingEnv.uid);
+      continue;
+    }
     const baseUrl = env === "prod" ? `https://api.${domain}` : `https://api-${env}.${domain}`;
-    const envRes = await postmanApi("/environments", token, {
+    const envRes = await postmanApi(`/environments?workspace=${workspaceId}`, token, {
       method: "POST",
       body: {
         environment: {
@@ -315,9 +346,23 @@ async function provisionPostmanWorkspace(
     }
   }
 
-  // ── 7. Configure monitor on smoke tests ──────────────────────────────
+  // ── 7. Configure monitor on smoke tests (idempotent) ──────────────────
+  // Get smoke UID — either from creation or from existing workspace contents
+  if (!smokeCollectionUid && existingSmoke?.uid) {
+    smokeCollectionUid = existingSmoke.uid;
+  }
+
   let monitorId: string | undefined;
-  if (smokeCollectionUid && environmentUids.length > 0) {
+  // Check if monitor already exists
+  const existingMonitors = await postmanApi("/monitors", token);
+  const existingMon = existingMonitors.ok
+    ? ((existingMonitors.data.monitors as Array<{ id: string; name: string }>) ?? []).find((m) => m.name === `${slug}-smoke-monitor`)
+    : null;
+  if (existingMon) {
+    monitorId = existingMon.id;
+  }
+
+  if (!monitorId && smokeCollectionUid && environmentUids.length > 0) {
     const monRes = await postmanApi("/monitors", token, {
       method: "POST",
       body: {
