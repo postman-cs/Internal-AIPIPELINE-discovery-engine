@@ -103,7 +103,10 @@ async function createGitLabRepo(
       projectId: res.data.id as number,
     };
   }
-  return { ok: false, error: `GitLab: ${(res.data.message ?? res.data.error ?? res.status) as string}` };
+  const errDetail = typeof res.data.message === "string"
+    ? res.data.message
+    : JSON.stringify(res.data.message ?? res.data.error ?? res.status);
+  return { ok: false, error: `GitLab (${res.status}): ${errDetail}` };
 }
 
 async function pushFilesToGitLab(
@@ -126,7 +129,8 @@ async function pushFilesToGitLab(
   });
 
   if (res.ok) return { ok: true };
-  return { ok: false, error: `GitLab commit: ${(res.data.message ?? res.status) as string}` };
+  const commitErr = typeof res.data.message === "string" ? res.data.message : JSON.stringify(res.data.message ?? res.status);
+  return { ok: false, error: `GitLab commit (${res.status}): ${commitErr}` };
 }
 
 // ---------------------------------------------------------------------------
