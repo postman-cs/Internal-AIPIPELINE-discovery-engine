@@ -12,7 +12,7 @@ import { createEvidenceSnapshot } from "@/lib/cascade/snapshot";
 import { runImpactAnalysis } from "@/lib/cascade/impact";
 import { executeRecomputeJob } from "@/lib/cascade/recompute";
 
-export const maxDuration = 900; // Vercel Pro: 15 min for full cascade
+export const maxDuration = 800; // Vercel Pro: 15 min for full cascade
 
 export async function POST(
   _request: NextRequest,
