@@ -80,9 +80,15 @@ RULES:
 - The JSON structure must mirror the Markdown content.
 - The Evidence Appendix MUST be the last section of the brief.
 
+CRITICAL SIZE RULES:
+- Keep briefMarkdown CONCISE: max 2000 characters. Use bullet points, not paragraphs.
+- Evidence Appendix: max 5 entries, excerpts max 100 chars each.
+- briefJson: mirror the markdown content in structured form.
+- Do NOT duplicate verbose text between briefMarkdown and briefJson.
+
 OUTPUT: Return JSON:
 {
-  "briefMarkdown": "full markdown string including Evidence Appendix section",
+  "briefMarkdown": "concise markdown (max 2000 chars)",
   "briefJson": {
     "projectName": "...",
     "companySnapshot": {...},
