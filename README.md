@@ -1,6 +1,70 @@
-# AI Pipeline — Postman CSE Discovery Intelligence Engine
+# Internal-AIPIPELINE-discovery-engine
 
 Retrieval-augmented, evidence-backed discovery intelligence system for Postman Customer Success Engineering. Ingests customer evidence from multiple sources, runs a deterministic 12-agent AI pipeline, and generates actionable discovery briefs, infrastructure topology, solution designs, and deployment plans — all with evidence citations and human-in-the-loop review.
+
+## Application Flow
+
+```mermaid
+flowchart TD
+    subgraph ingest [Evidence Ingestion]
+        A1[Kepler Intel]
+        A2[DNS / Headers]
+        A3[Gmail OAuth]
+        A4[Webhooks]
+        A5[Manual Upload]
+        A6[OpenAPI Specs]
+    end
+
+    subgraph processing [Document Processing]
+        B1[Sentence-Aware Chunker]
+        B2[Voyage AI Embeddings]
+        B3["PostgreSQL + pgvector"]
+    end
+
+    subgraph discovery [Discovery Pipeline - 5 Agents]
+        C1[ReconSynthesizer]
+        C2[SignalClassifier]
+        C3[MaturityScorer]
+        C4[HypothesisGenerator]
+        C5[BriefGenerator]
+    end
+
+    subgraph cascade [Extended Cascade - 7 Agents]
+        D1[TopologyBuilder]
+        D2[FutureStateDesigner]
+        D3[SolutionDesigner]
+        D4[InfrastructurePlanner]
+        D5[TestDesigner]
+        D6[CraftSolution]
+        D7[DeploymentPlanner]
+    end
+
+    subgraph output [Output]
+        E1[Discovery Brief]
+        E2[Topology Graph]
+        E3[Proposals - Accept/Reject]
+        E4[Phase Artifacts]
+    end
+
+    ingest --> B1 --> B2 --> B3
+    B3 --> discovery
+    C1 --> C2 --> C3 --> C4 --> C5
+    discovery --> cascade
+    D1 --> D2 --> D3 --> D4 --> D5 --> D6 --> D7
+    cascade --> output
+```
+
+## Setup
+
+```mermaid
+flowchart LR
+    A[Clone Repo] --> B[npm install]
+    B --> C[Configure .env]
+    C --> D[npx prisma migrate dev]
+    D --> E[npx prisma db seed]
+    E --> F[npm run dev]
+    F --> G["App at localhost:3000"]
+```
 
 ## System Architecture
 
